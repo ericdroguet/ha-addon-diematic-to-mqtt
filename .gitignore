@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+*.bak*
+*.conf
+!logging.conf
+log/
