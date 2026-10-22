@@ -40,13 +40,6 @@ class Diematic3Panel(Diematic):
 		else:
 			return(False);
 			
-		# Diagnostic en lecture seule : compteurs potentiels des deux allures.
-		# Ne modifie aucun registre Modbus.
-		self.logger.warning(
-			"DIEMATIC_DIAG registres bruts 77=%s 78=%s 79=%s 80=%s (hex: %s %s %s %s)",
-			*(self.registers.get(i) for i in (77, 78, 79, 80)),
-			*(f"0x{self.registers[i]:04X}" if isinstance(self.registers.get(i), int) else "NA" for i in (77, 78, 79, 80))
-		)
 		#update registers 128->191
 		#reg=self.modBusInterface.masterReadAnalog(self.regulatorAddress,128,64);
 		#if (reg is not None):

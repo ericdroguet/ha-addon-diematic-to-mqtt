@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python
+#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
 import sys,signal,threading
@@ -41,10 +41,10 @@ class MessageBuffer:
 					#send message without trailing / on topic
 					if (topic!=''):
 						self.mqtt.publish(mqttTopicPrefix+'/'+topic,self.buffer[topic]['value'],1,True);
-						self.logger.info('Publish :'+mqttTopicPrefix+'/'+topic+' '+self.buffer[topic]['value'])
+						self.logger.debug('Publish :'+mqttTopicPrefix+'/'+topic+' '+self.buffer[topic]['value'])
 					else:
 						self.mqtt.publish(mqttTopicPrefix,self.buffer[topic]['value'],1,True);
-						self.logger.info('Publish :'+mqttTopicPrefix+' '+self.buffer[topic]['value'])
+						self.logger.debug('Publish :'+mqttTopicPrefix+' '+self.buffer[topic]['value'])
 					#set the flag to False
 					self.buffer[topic]['update']=False;
 		#if broker not connected
@@ -120,77 +120,80 @@ def diematicPublish(self):
 	#send MQTT messages
 	buffer.send();
 
-def haSendDiscoveryMessages(client, userdata, message):
-	if (message.payload.decode()=='online'):
-		logger.info('Sending HA discovery messages');
+def sendDiscoveryMessages():
+	logger.debug('Sending HA discovery messages');
 		
-		#boiler
-		hassio.addSensor('heater_datetime',"Horloge Chaudière",None,'date',"{{ as_timestamp(value) |timestamp_custom ('%d/%m/%Y %H:%M') }}",None);
-		hassio.addSwitch('heater_datetime_set',"Synchro Horloge",'unknown','date/set','--','Now');
-		hassio.addSensor('type',"Type",None,'type',None,None);
-		hassio.addSensor('ctrl',"Controleur",None,'ctrl',None,None);
-		hassio.addSensor('ext_temp',"Température Extérieure",'temperature','ext/temp',None,"°C");
-		hassio.addSensor('boiler_temp',"Température Chaudière",'temperature','temp',None,"°C");	
-		hassio.addSensor('target_temp',"Température Cible",'temperature','targetTemp',None,"°C");
-		hassio.addSensor('return_temp',"Température Retour",'temperature','returnTemp',None,"°C");
-		hassio.addSensor('water_pressure',"Pression d'eau",'pressure','waterPressure',None,"bar");
-		hassio.addSensor('power',"Puissance",'power_factor','power',None,"%");
-		hassio.addSensor('smoke_temp',"Température Fumées",'temperature','smokeTemp',None,"°C");
-		hassio.addSensor('ionization_current',"Courant Ionisation",'current','ionizationCurrent',None,None);	
-		hassio.addSensor('fan_speed',"Vitesse Ventilateur",None,'fanSpeed',None,"RPM");	
-		hassio.addBinarySensor('burner_status',"Etat Bruleur",None,'burnerStatus',"1","0");	
-		hassio.addSensor('pump_power',"Puissance Pompe",'power_factor','pumpPower',None,"%");
-		hassio.addSensor('alarm',"Etat",None,'alarm',"{{ value_json.txt}}",None);
-		hassio.addSensor('alarm_id',"N° Erreur",None,'alarm',"{{ value_json.id}}",None);
-		hassio.addSensor('nb_impuls',"Impulsions Bruleur",None,'nbImpuls',None,None);	
-		hassio.addSensor('fct_brul',"Fonctionnement Bruleur",None,'fctBrul',None,"hours");
-		hassio.addSensor('burner1_hours',"Heures Brûleur Allure 1 (≈10 h)",None,'burner1/hours',None,"h");
-		hassio.addSensor('burner2_hours',"Heures Brûleur Allure 2 (≈10 h)",None,'burner2/hours',None,"h");
-		hassio.addSensor('burner1_starts',"Démarrages Brûleur Allure 1 (≈10)",None,'burner1/starts',None,None);
-		hassio.addSensor('burner2_starts',"Démarrages Brûleur Allure 2 (≈10)",None,'burner2/starts',None,None);
-		hassio.addSensor('fuel_estimated_total',"Fioul estimé cumulé",None,'fuel/estimatedTotalLiters',None,"L");
-		
-		#hot water
-		hassio.addBinarySensor('hot_water_pump',"Pompe ECS",None,'hotWater/pump',"1","0");	
-		hassio.addSensor('hot_water_temp',"Température ECS",'temperature','hotWater/temp',None,"°C");
-		hassio.addSelect('hot_water_mode',"Mode ECS",'hotWater/mode','hotWater/mode/set',['AUTO','TEMP','PERM']);
-		hassio.addSensor('hot_water_mode',"Mode ECS",None,'hotWater/mode',None,None);
-		hassio.addNumber('hot_water_temp_day',"Température ECS Jour",'hotWater/dayTemp','hotWater/dayTemp/set',10,80,5,"°C");
-		hassio.addNumber('hot_water_temp_night',"Température ECS Nuit",'hotWater/nightTemp','hotWater/nightTemp/set',10,80,5,"°C");
-		
-		#area A
-		hassio.addSensor('zone_A_temp',"Température Zone A",'temperature','zoneA/temp',None,"°C");
-		hassio.addSelect('zone_A_mode',"Mode Zone A",'zoneA/mode','zoneA/mode/set',['AUTO','TEMP JOUR','PERM JOUR','TEMP NUIT','PERM NUIT','ANTIGEL']);
-		hassio.addSensor('zone_A_mode',"Mode Zone A",None,'zoneA/mode',None,None);
-		hassio.addBinarySensor('zone_A_pump',"Pompe Zone A",None,'zoneA/pump',"1","0");
-		hassio.addNumber('zone_A_temp_day',"Température Jour Zone A",'zoneA/dayTemp','zoneA/dayTemp/set',5,30,0.5,"°C");
-		hassio.addNumber('zone_A_temp_night',"Température Nuit Zone A",'zoneA/nightTemp','zoneA/nightTemp/set',5,30,0.5,"°C");
-		hassio.addNumber('zone_A_temp_antiice',"Température Antigel Zone A",'zoneA/antiiceTemp','zoneA/antiiceTemp/set',5,20,0.5,"°C");
-		
-		#area B
-		hassio.addSensor('zone_B_temp',"Température Zone B",'temperature','zoneB/temp',None,"°C");
-		hassio.addSelect('zone_B_mode',"Mode Zone B",'zoneB/mode','zoneB/mode/set',['AUTO','TEMP JOUR','PERM JOUR','TEMP NUIT','PERM NUIT','ANTIGEL']);
-		hassio.addSensor('zone_B_mode',"Mode Zone B",None,'zoneB/mode',None,None);
-		hassio.addBinarySensor('zone_B_pump',"Pompe Zone B",None,'zoneB/pump',"1","0");
-		hassio.addNumber('zone_B_temp_day',"Température Jour Zone B",'zoneB/dayTemp','zoneB/dayTemp/set',5,30,0.5,"°C");
-		hassio.addNumber('zone_B_temp_night',"Température Nuit Zone B",'zoneB/nightTemp','zoneB/nightTemp/set',5,30,0.5,"°C");
-		hassio.addNumber('zone_B_temp_antiice',"Température Antigel Zone B",'zoneB/antiiceTemp','zoneB/antiiceTemp/set',5,20,0.5,"°C");
-
-		#area C
-		hassio.addSensor('zone_C_temp',"Température Zone C",'temperature','zoneC/temp',None,"°C");
-		hassio.addSelect('zone_C_mode',"Mode Zone C",'zoneC/mode','zoneC/mode/set',['AUTO','TEMP JOUR','PERM JOUR','TEMP NUIT','PERM NUIT','ANTIGEL']);
-		hassio.addSensor('zone_C_mode',"Mode Zone C",None,'zoneC/mode',None,None);
-		hassio.addBinarySensor('zone_C_pump',"Pompe Zone C",None,'zoneC/pump',"1","0");
-		hassio.addSensor('zone_C_target_temp',"Température Calculée Zone C",'temperature','zoneC/targetTemp',None,"°C");
-		hassio.addSensor('zone_C_departure_temp',"Température Départ Zone C",'temperature','zoneC/departureTemp',None,"°C");
-		hassio.addNumber('zone_C_temp_day',"Température Jour Zone C",'zoneC/dayTemp','zoneC/dayTemp/set',5,30,0.5,"°C");
-		hassio.addNumber('zone_C_temp_night',"Température Nuit Zone C",'zoneC/nightTemp','zoneC/nightTemp/set',5,30,0.5,"°C");
-		hassio.addNumber('zone_C_temp_antiice',"Température Antigel Zone C",'zoneC/antiiceTemp','zoneC/antiiceTemp/set',5,20,0.5,"°C");
-		
+	#boiler
+	hassio.addSensor('heater_datetime',"Horloge Chaudière",None,'date',"{{ as_timestamp(value) |timestamp_custom ('%d/%m/%Y %H:%M') }}",None);
+	hassio.addSwitch('heater_datetime_set',"Synchro Horloge",'unknown','date/set','--','Now');
+	hassio.addSensor('type',"Type",None,'type',None,None);
+	hassio.addSensor('ctrl',"Controleur",None,'ctrl',None,None);
+	hassio.addSensor('ext_temp',"Température Extérieure",'temperature','ext/temp',None,"°C");
+	hassio.addSensor('boiler_temp',"Température Chaudière",'temperature','temp',None,"°C");	
+	hassio.addSensor('target_temp',"Température Cible",'temperature','targetTemp',None,"°C");
+	hassio.addSensor('return_temp',"Température Retour",'temperature','returnTemp',None,"°C");
+	hassio.addSensor('water_pressure',"Pression d'eau",'pressure','waterPressure',None,"bar");
+	hassio.addSensor('power',"Puissance",'power_factor','power',None,"%");
+	hassio.addSensor('smoke_temp',"Température Fumées",'temperature','smokeTemp',None,"°C");
+	hassio.addSensor('ionization_current',"Courant Ionisation",'current','ionizationCurrent',None,None);	
+	hassio.addSensor('fan_speed',"Vitesse Ventilateur",None,'fanSpeed',None,"RPM");	
+	hassio.addBinarySensor('burner_status',"Etat Bruleur",None,'burnerStatus',"1","0");	
+	hassio.addSensor('pump_power',"Puissance Pompe",'power_factor','pumpPower',None,"%");
+	hassio.addSensor('alarm',"Etat",None,'alarm',"{{ value_json.txt}}",None);
+	hassio.addSensor('alarm_id',"N° Erreur",None,'alarm',"{{ value_json.id}}",None);
+	hassio.addSensor('nb_impuls',"Impulsions Bruleur",None,'nbImpuls',None,None);	
+	hassio.addSensor('fct_brul',"Fonctionnement Bruleur",None,'fctBrul',None,"hours");
+	hassio.addSensor('burner1_hours',"Heures Brûleur Allure 1 (≈10 h)",None,'burner1/hours',None,"h");
+	hassio.addSensor('burner2_hours',"Heures Brûleur Allure 2 (≈10 h)",None,'burner2/hours',None,"h");
+	hassio.addSensor('burner1_starts',"Démarrages Brûleur Allure 1 (≈10)",None,'burner1/starts',None,None);
+	hassio.addSensor('burner2_starts',"Démarrages Brûleur Allure 2 (≈10)",None,'burner2/starts',None,None);
+	hassio.addSensor('fuel_estimated_total',"Fioul estimé cumulé",None,'fuel/estimatedTotalLiters',None,"L");
 	
+	#hot water
+	hassio.addBinarySensor('hot_water_pump',"Pompe ECS",None,'hotWater/pump',"1","0");	
+	hassio.addSensor('hot_water_temp',"Température ECS",'temperature','hotWater/temp',None,"°C");
+	hassio.addSelect('hot_water_mode',"Mode ECS",'hotWater/mode','hotWater/mode/set',['AUTO','TEMP','PERM']);
+	hassio.addSensor('hot_water_mode',"Mode ECS",None,'hotWater/mode',None,None);
+	hassio.addNumber('hot_water_temp_day',"Température ECS Jour",'hotWater/dayTemp','hotWater/dayTemp/set',10,80,5,"°C");
+	hassio.addNumber('hot_water_temp_night',"Température ECS Nuit",'hotWater/nightTemp','hotWater/nightTemp/set',10,80,5,"°C");
+	
+	#area A
+	hassio.addSensor('zone_A_temp',"Température Zone A",'temperature','zoneA/temp',None,"°C");
+	hassio.addSelect('zone_A_mode',"Mode Zone A",'zoneA/mode','zoneA/mode/set',['AUTO','TEMP JOUR','PERM JOUR','TEMP NUIT','PERM NUIT','ANTIGEL']);
+	hassio.addSensor('zone_A_mode',"Mode Zone A",None,'zoneA/mode',None,None);
+	hassio.addBinarySensor('zone_A_pump',"Pompe Zone A",None,'zoneA/pump',"1","0");
+	hassio.addNumber('zone_A_temp_day',"Température Jour Zone A",'zoneA/dayTemp','zoneA/dayTemp/set',5,30,0.5,"°C");
+	hassio.addNumber('zone_A_temp_night',"Température Nuit Zone A",'zoneA/nightTemp','zoneA/nightTemp/set',5,30,0.5,"°C");
+	hassio.addNumber('zone_A_temp_antiice',"Température Antigel Zone A",'zoneA/antiiceTemp','zoneA/antiiceTemp/set',5,20,0.5,"°C");
+	
+	#area B
+	hassio.addSensor('zone_B_temp',"Température Zone B",'temperature','zoneB/temp',None,"°C");
+	hassio.addSelect('zone_B_mode',"Mode Zone B",'zoneB/mode','zoneB/mode/set',['AUTO','TEMP JOUR','PERM JOUR','TEMP NUIT','PERM NUIT','ANTIGEL']);
+	hassio.addSensor('zone_B_mode',"Mode Zone B",None,'zoneB/mode',None,None);
+	hassio.addBinarySensor('zone_B_pump',"Pompe Zone B",None,'zoneB/pump',"1","0");
+	hassio.addNumber('zone_B_temp_day',"Température Jour Zone B",'zoneB/dayTemp','zoneB/dayTemp/set',5,30,0.5,"°C");
+	hassio.addNumber('zone_B_temp_night',"Température Nuit Zone B",'zoneB/nightTemp','zoneB/nightTemp/set',5,30,0.5,"°C");
+	hassio.addNumber('zone_B_temp_antiice',"Température Antigel Zone B",'zoneB/antiiceTemp','zoneB/antiiceTemp/set',5,20,0.5,"°C");
+
+	#area C
+	hassio.addSensor('zone_C_temp',"Température Zone C",'temperature','zoneC/temp',None,"°C");
+	hassio.addSelect('zone_C_mode',"Mode Zone C",'zoneC/mode','zoneC/mode/set',['AUTO','TEMP JOUR','PERM JOUR','TEMP NUIT','PERM NUIT','ANTIGEL']);
+	hassio.addSensor('zone_C_mode',"Mode Zone C",None,'zoneC/mode',None,None);
+	hassio.addBinarySensor('zone_C_pump',"Pompe Zone C",None,'zoneC/pump',"1","0");
+	hassio.addSensor('zone_C_target_temp',"Température Calculée Zone C",'temperature','zoneC/targetTemp',None,"°C");
+	hassio.addSensor('zone_C_departure_temp',"Température Départ Zone C",'temperature','zoneC/departureTemp',None,"°C");
+	hassio.addNumber('zone_C_temp_day',"Température Jour Zone C",'zoneC/dayTemp','zoneC/dayTemp/set',5,30,0.5,"°C");
+	hassio.addNumber('zone_C_temp_night',"Température Nuit Zone C",'zoneC/nightTemp','zoneC/nightTemp/set',5,30,0.5,"°C");
+	hassio.addNumber('zone_C_temp_antiice',"Température Antigel Zone C",'zoneC/antiiceTemp','zoneC/antiiceTemp/set',5,20,0.5,"°C");
+	
+	
+def haSendDiscoveryMessages(client, userdata, message):
+	if message.payload.decode().lower() == 'online':
+		sendDiscoveryMessages()
+
 def on_connect(client, userdata, flags, reason_code, properties=None):
 	client.brokerConnected=True;
-	logger.critical('Connected to MQTT broker');
+	logger.info('Connected to MQTT broker');
 	#subscribe to control messages with Q0s of 2
 	client.subscribe(mqttTopicPrefix+'/+/+/set',2);
 	client.subscribe(mqttTopicPrefix+'/date/set',2);
@@ -200,12 +203,15 @@ def on_connect(client, userdata, flags, reason_code, properties=None):
 	buffer.clear();
 	buffer.update('status','Offline');
 	buffer.send();
+	# Annonce les entites au demarrage, meme sans message de naissance HA.
+	if hassioDiscoveryEnable:
+		sendDiscoveryMessages();
 
 	
 	
 def on_disconnect(client, userdata, flags, reason_code, properties=None):
 	client.brokerConnected=False;
-	logger.critical('Diconnected from MQTT broker');
+	logger.error('Disconnected from MQTT broker');
 	
 def modeSet(client, userdata, message):
 	#table for topic to attribute bind
@@ -285,7 +291,7 @@ def paramSet(client, userdata, message):
 		logger.exception(exc);
 
 def sigterm_exit(signum, frame):
-		logger.critical('Stop requested by SIGTERM, raising KeyboardInterrupt');
+		logger.debug('Stop requested by SIGTERM');
 		raise KeyboardInterrupt;
 
 
@@ -307,8 +313,8 @@ if __name__ == '__main__':
 		modbusPort=config.get('Modbus','port');
 		modbusRegulatorAddress=int(config.get('Modbus','regulatorAddress'),0);
 		modbusInterfaceAddress=int(config.get('Modbus','interfaceAddress',fallback='0'),0);
-		logger.critical('Modbus interface address: '+modbusAddress+' : '+modbusPort);
-		logger.critical('Modbus regulator address: '+ hex(modbusRegulatorAddress));
+		logger.debug('Modbus interface address: '+modbusAddress+' : '+modbusPort);
+		logger.debug('Modbus regulator address: '+ hex(modbusRegulatorAddress));
 		
 		#regulator type
 		regulatorType=config.get('Boiler','regulatorType',fallback='Diematic3');
@@ -329,28 +335,28 @@ if __name__ == '__main__':
 		mqttClientId=config.get('MQTT','clientId');
 		mqttTopicPrefix=config.get('MQTT','topicPrefix')+'/'+mqttClientId;
 		
-		logger.critical('Broker: '+mqttBrokerHost+' : '+mqttBrokerPort);
-		logger.critical('Topic Root: '+mqttTopicPrefix);	
+		logger.debug('Broker: '+mqttBrokerHost+' : '+mqttBrokerPort);
+		logger.debug('Topic Root: '+mqttTopicPrefix);	
 		
 		#Home Assistant discovery settings
 		hassioDiscoveryEnable=config.getboolean('Home Assistant','MQTT_DiscoveryEnable');
 		hassioDiscoveryPrefix=config.get('Home Assistant','discovery_prefix');	
 		
-		logger.critical('Hassio Discovery Enable: '+ str(hassioDiscoveryEnable));
-		logger.critical('Hassio Discovery Prefix: '+ hassioDiscoveryPrefix);
+		logger.debug('Hassio Discovery Enable: '+ str(hassioDiscoveryEnable));
+		logger.debug('Hassio Discovery Prefix: '+ hassioDiscoveryPrefix);
 		
 
 		#init panel
 		if (regulatorType=='DiematicDelta'):
-			logger.critical('Regulator type is Diematic Delta');
+			logger.debug('Regulator type is Diematic Delta');
 			DiematicDeltaPanel.DiematicDeltaPanel.updateCallback=diematicPublish;
 			panel=DiematicDeltaPanel.DiematicDeltaPanel(modbusAddress,int(modbusPort),modbusRegulatorAddress,modbusInterfaceAddress,boilerTimezone,boilerTimeSync);
 		elif (regulatorType=='Diematic4'):
-			logger.critical('Regulator type is Diematic4');
+			logger.debug('Regulator type is Diematic4');
 			Diematic4Panel.Diematic4Panel.updateCallback=diematicPublish;
 			panel=Diematic4Panel.Diematic4Panel(modbusAddress,int(modbusPort),modbusRegulatorAddress,modbusInterfaceAddress,boilerTimezone,boilerTimeSync);
 		else:
-			logger.critical('Regulator type is Diematic3');
+			logger.debug('Regulator type is Diematic3');
 			Diematic3Panel.Diematic3Panel.updateCallback=diematicPublish;
 			panel=Diematic3Panel.Diematic3Panel(modbusAddress,int(modbusPort),modbusRegulatorAddress,modbusInterfaceAddress,boilerTimezone,boilerTimeSync);
 		
@@ -407,14 +413,14 @@ if __name__ == '__main__':
 		panel.loop_stop();		
 		#disconnect mqtt server
 		client.loop_stop();
-		logger.critical('Stopped');
+		logger.info('Stopped');
 	except KeyboardInterrupt:
 		#stop modbus thread
 		panel.loop_stop();
 
 		#disconnect mqtt server
 		client.loop_stop();
-		logger.critical('Stopped by KeyboardInterrupt');
+		logger.info('Stopped by KeyboardInterrupt');
 	except BaseException as exc:	
 		logger.exception(exc);
 
