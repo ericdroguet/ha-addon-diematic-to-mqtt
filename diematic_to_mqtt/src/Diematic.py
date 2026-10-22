@@ -178,6 +178,11 @@ class Diematic:
 		self._zoneCAntiiceTargetTemp=None;
 		self._nbImpuls=None;
 		self._fctBrul=None;
+		self.burner1Hours=None;
+		self.burner2Hours=None;
+		self.burner1Starts=None;
+		self.burner2Starts=None;
+		self.fuelEstimatedLiters=None;
 		
 	def initRegulator(self):
 		#RS485 converter connexion init
@@ -582,6 +587,26 @@ class Diematic:
 			self._zoneCDayTargetTemp=None;
 			self._zoneCNightTargetTemp=None;
 			self._zoneCAntiiceTargetTemp=None;
+
+		# Diematic 3: registers 77-80 encode decimal tens in packed BCD.
+		# The last digit is not available in these registers: values are approximate.
+		if type(self).__name__ == "Diematic3Panel":
+			def bcd_tens(register):
+				raw = self.registers.get(register)
+				if raw is None or raw in (-1, 0xFFFF):
+					return None
+				digits = f"{raw:04X}"
+				return int(digits) * 10 if digits.isdecimal() else None
+			self.burner1Starts = bcd_tens(77)
+			self.burner1Hours = bcd_tens(78)
+			self.burner2Starts = bcd_tens(79)
+			self.burner2Hours = bcd_tens(80)
+			# Assumption: stage 2 hours are included in stage 1 operating hours.
+			# Stage 1 total = 4.64 L/h; stage 2 adds 2.98 L/h.
+			if self.burner1Hours is not None and self.burner2Hours is not None:
+				self.fuelEstimatedLiters = round(4.64 * self.burner1Hours + 2.98 * self.burner2Hours, 1)
+			else:
+				self.fuelEstimatedLiters = None
 
 		#for Diematic Delta regulator only
 		if type(self).__name__ == "DiematicDeltaPanel":

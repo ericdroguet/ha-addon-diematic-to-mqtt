@@ -78,6 +78,11 @@ def diematicPublish(self):
 	buffer.update('alarm',json.dumps(self.alarm) if self.alarm is not None else '');
 	buffer.update('nbImpuls',intValue(self.nbImpuls));
 	buffer.update('fctBrul',intValue(self.fctBrul));
+	buffer.update('burner1/hours',intValue(self.burner1Hours));
+	buffer.update('burner2/hours',intValue(self.burner2Hours));
+	buffer.update('burner1/starts',intValue(self.burner1Starts));
+	buffer.update('burner2/starts',intValue(self.burner2Starts));
+	buffer.update('fuel/estimatedTotalLiters',f'{self.fuelEstimatedLiters:.1f}' if self.fuelEstimatedLiters is not None else '');
 
 	#hotwater
 	buffer.update('hotWater/pump',intValue(self.hotWaterPump));
@@ -139,6 +144,11 @@ def haSendDiscoveryMessages(client, userdata, message):
 		hassio.addSensor('alarm_id',"N° Erreur",None,'alarm',"{{ value_json.id}}",None);
 		hassio.addSensor('nb_impuls',"Impulsions Bruleur",None,'nbImpuls',None,None);	
 		hassio.addSensor('fct_brul',"Fonctionnement Bruleur",None,'fctBrul',None,"hours");
+		hassio.addSensor('burner1_hours',"Heures Brûleur Allure 1 (≈10 h)",None,'burner1/hours',None,"h");
+		hassio.addSensor('burner2_hours',"Heures Brûleur Allure 2 (≈10 h)",None,'burner2/hours',None,"h");
+		hassio.addSensor('burner1_starts',"Démarrages Brûleur Allure 1 (≈10)",None,'burner1/starts',None,None);
+		hassio.addSensor('burner2_starts',"Démarrages Brûleur Allure 2 (≈10)",None,'burner2/starts',None,None);
+		hassio.addSensor('fuel_estimated_total',"Fioul estimé cumulé",None,'fuel/estimatedTotalLiters',None,"L");
 		
 		#hot water
 		hassio.addBinarySensor('hot_water_pump',"Pompe ECS",None,'hotWater/pump',"1","0");	
