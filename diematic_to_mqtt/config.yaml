@@ -1,5 +1,5 @@
 name: "Diematic to MQTT - Eric"
-version: "1.1.1"
+version: "1.1.2"
 slug: "diematic_to_mqtt_eric"
 description: "Passerelle ModBus vers MQTT pour chaudière De Dietrich Diematic 3/4 (basé sur Benoit3/Diematic_to_MQTT)"
 url: "https://github.com/ericdroguet/ha-addon-diematic-to-mqtt"
