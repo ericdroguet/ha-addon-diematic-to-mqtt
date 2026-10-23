@@ -155,6 +155,7 @@ def sendDiscoveryMessages():
 	hassio.addSelect('hot_water_mode',"Mode ECS",'hotWater/mode','hotWater/mode/set',['AUTO','TEMP','PERM']);
 	hassio.addSensor('hot_water_mode',"Mode ECS",None,'hotWater/mode',None,None);
 	hassio.addNumber('hot_water_temp_day',"Température ECS Jour",'hotWater/dayTemp','hotWater/dayTemp/set',10,80,5,"°C");
+	hassio.addClimate('hot_water_climate',"Thermostat ECS",'hotWater/temp','hotWater/dayTemp','hotWater/dayTemp/set',10,80,5);
 	hassio.addNumber('hot_water_temp_night',"Température ECS Nuit",'hotWater/nightTemp','hotWater/nightTemp/set',10,80,5,"°C");
 	
 	#area A
@@ -183,6 +184,7 @@ def sendDiscoveryMessages():
 	hassio.addSensor('zone_C_target_temp',"Température Calculée Zone C",'temperature','zoneC/targetTemp',None,"°C");
 	hassio.addSensor('zone_C_departure_temp',"Température Départ Zone C",'temperature','zoneC/departureTemp',None,"°C");
 	hassio.addNumber('zone_C_temp_day',"Température Jour Zone C",'zoneC/dayTemp','zoneC/dayTemp/set',5,30,0.5,"°C");
+	hassio.addClimate('zone_C_climate',"Thermostat Zone C",'zoneC/temp','zoneC/dayTemp','zoneC/dayTemp/set',5,30,0.5);
 	hassio.addNumber('zone_C_temp_night',"Température Nuit Zone C",'zoneC/nightTemp','zoneC/nightTemp/set',5,30,0.5,"°C");
 	hassio.addNumber('zone_C_temp_antiice',"Température Antigel Zone C",'zoneC/antiiceTemp','zoneC/antiiceTemp/set',5,20,0.5,"°C");
 	
