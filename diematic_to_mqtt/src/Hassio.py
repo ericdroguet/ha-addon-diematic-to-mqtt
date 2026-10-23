@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python
+#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
 import logging,json
@@ -136,5 +136,26 @@ class Hassio:
 		payload["qos"]=2;
 		payload['device'] = self.device
 		#send discovery message
-		self.mqtt.publish(discoveryTopic,json.dumps(payload),1,False);		
+		self.mqtt.publish(discoveryTopic,json.dumps(payload),1,False);
 
+	def addClimate(self, object_id, name, shortCurrentTempTopic, shortTargetTempTopic, shortCommandTopic, minTemp, maxTemp, step):
+		# MQTT Discovery only: this method does not command the boiler.
+		discoveryTopic = self.discovery_prefix + '/climate/' + self.clientId + '/' + object_id + '/config'
+		payload = {
+			'name': name,
+			'default_entity_id': 'climate.' + object_id,
+			'unique_id': self.clientId + '.' + object_id,
+			'current_temperature_topic': self.topicRoot + '/' + shortCurrentTempTopic,
+			'temperature_state_topic': self.topicRoot + '/' + shortTargetTempTopic,
+			'temperature_command_topic': self.topicRoot + '/' + shortCommandTopic,
+			'temperature_unit': 'C',
+			'min_temp': minTemp,
+			'max_temp': maxTemp,
+			'temp_step': step,
+			'modes': ['heat'],
+			'availability_topic': self.availabilityTopic,
+			'payload_available': self.payload_available,
+			'payload_not_available': self.payload_not_available,
+			'device': self.device
+		}
+		self.mqtt.publish(discoveryTopic, json.dumps(payload), 1, False)
