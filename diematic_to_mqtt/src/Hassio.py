@@ -152,6 +152,10 @@ class Hassio:
 			'min_temp': minTemp,
 			'max_temp': maxTemp,
 			'temp_step': step,
+			# Display-only mode derived from an existing MQTT state topic.
+			# No mode_command_topic: the boiler's AUTO program is untouched.
+			'mode_state_topic': self.topicRoot + '/' + shortTargetTempTopic,
+			'mode_state_template': "{{ 'heat' }}",
 			'modes': ['heat'],
 			'availability_topic': self.availabilityTopic,
 			'payload_available': self.payload_available,
