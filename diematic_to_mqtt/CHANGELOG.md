@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.6
+
+- Fix Diematic 3 circuit C mode control from Home Assistant: process `zoneC/mode/set` commands and write register 38 (`MODE_C`).
+- Follow the existing mode A/B remote-control refresh procedure; other temperature and ECS controls are unchanged.
+
+
 ## 1.1.0
 
 - Circuit C support (Diematic 3): mode, day/night/anti-frost setpoints, calculated temperature, departure temperature, pump. New option `enable_circuit_c`.
