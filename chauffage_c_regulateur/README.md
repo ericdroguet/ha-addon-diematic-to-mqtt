@@ -47,3 +47,9 @@ Il ne s'agit pas encore d'un modèle prédictif : le calcul réagit à la demand
 - Aucune anticipation si toutes les pièces sont confortablement au-dessus de leur consigne ; pas de préchauffage sans prévisions.
 - Les journaux affichent les consignes sans météo et avec météo (après limitation de vitesse), et le nombre de zones proches de leur consigne.
 - L'option météo reste désactivée par défaut pour une installation sans surprise ; activer explicitement `weather_anticipation`.
+
+## V0.1.4 — anticipation météo bidirectionnelle
+- Prévisions horaires pondérées sur 1 à 6 heures, avec priorité aux deux prochaines heures.
+- Refroidissement : correction positive si pièce en demande ou proche de sa consigne.
+- Réchauffement : correction négative, sauf si une pièce manque de plus de 0,5 °C.
+- Journaux : variation prévue, correction signée, consigne sans et avec météo.
