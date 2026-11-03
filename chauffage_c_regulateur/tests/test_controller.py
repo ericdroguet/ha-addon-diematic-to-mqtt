@@ -97,7 +97,7 @@ if __name__=="__main__":
 class WarmingTests(unittest.TestCase):
     def test_warming_reduces_virtual_setpoint(self):
         item=d()
-        app.add_room(item,"Salon",21.6,21.5,False)
+        app.add_room(item,"Salon",21.2,21.5,True)
         correction=app.weather_adjustment(4.5,item,1.0)
         self.assertEqual(correction,-1.0)
         self.assertLess(app.decide(item,21.0,OPTS,correction),app.decide(item,21.0,OPTS,0.0))
