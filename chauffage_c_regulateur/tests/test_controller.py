@@ -100,7 +100,7 @@ class WarmingTests(unittest.TestCase):
         app.add_room(item,"Salon",21.2,21.5,True)
         correction=app.weather_adjustment(4.5,item,1.0)
         self.assertEqual(correction,-1.0)
-        self.assertLess(app.decide(item,21.0,OPTS,correction),app.decide(item,21.0,OPTS,0.0))
+        self.assertLess(app.decide(item,19.5,OPTS,correction),app.decide(item,19.5,OPTS,0.0))
     def test_no_reduction_when_room_is_cold(self):
         item=d()
         app.add_room(item,"Salon",20.0,21.5,True)
