@@ -1,5 +1,5 @@
 name: "Régulation intelligente - Circuit C"
-version: "0.1.2"
+version: "0.1.4"
 slug: "chauffage_c_regulateur"
 description: "Régulation indépendante du circuit C à partir des thermostats Danfoss et Eve"
 url: "https://github.com/ericdroguet/ha-addon-diematic-to-mqtt"
