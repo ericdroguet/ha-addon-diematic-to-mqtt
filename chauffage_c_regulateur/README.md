@@ -32,3 +32,12 @@ Danfoss : séjour, cuisine, entrée, bureau, buanderie, Adaline, Octave, invité
 
 ## Limites V1
 Il ne s'agit pas encore d'un modèle prédictif : le calcul réagit à la demande actuelle, et la météo extérieure influence déjà la loi d'eau Diematic. La prévision et l'apprentissage seront ajoutés après collecte et vérification des historiques. Contrôler particulièrement les pièces sans tête thermostatique et la dynamique de la vanne mélangeuse.
+
+## Anticipation météo optionnelle V0.1.2
+
+- Option `weather_anticipation: false` par défaut : comportement inchangé avant activation.
+- Prévisions horaires `weather.forecast_maison` via `weather.get_forecasts`, interrogées toutes les 15 minutes.
+- Si au moins une pièce demande du chauffage, bonus virtuel de +0,5 °C pour une baisse extérieure prévue de 2 °C et +1 °C pour 4 °C ou davantage, dans les 1 à 3,5 heures.
+- Plafond configurable avec `weather_max_boost` (0 à 1 °C). Les bornes et limites de variation V1 restent actives.
+- Pas de bonus si les prévisions sont indisponibles, moins de 8 pièces valides ou aucune demande.
+- Vérifier d'abord en simulation (`dry_run: true`). La prise en compte du soleil et de l'inertie apprise viendra plus tard.
