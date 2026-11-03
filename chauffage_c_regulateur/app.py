@@ -6,6 +6,7 @@ import signal
 import sys
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from urllib import request, error
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -35,6 +36,7 @@ ZONE_NIGHT = "number.zone_c_temp_night"
 ZONE_MODE = "select.zone_c_mode"
 ZONE_DEPARTURE = "sensor.zone_c_departure_temp"
 OUTDOOR = "sensor.ext_temp"
+WEATHER = "weather.forecast_maison"
 STOP = False
 
 
@@ -92,6 +94,8 @@ def read_options():
         raise ValueError("Bornes virtuelles incohérentes")
     opts["poll_seconds"] = max(15, int(opts["poll_seconds"]))
     opts["write_interval_seconds"] = max(60, int(opts["write_interval_seconds"]))
+    opts["weather_anticipation"] = bool(opts.get("weather_anticipation", False))
+    opts["weather_max_boost"] = max(0.0, min(1.0, float(opts.get("weather_max_boost", 1.0))))
     return opts
 
 
@@ -141,13 +145,43 @@ def collect():
     return result
 
 
+def forecast_cooling(current_outdoor):
+    """Maximum predicted outdoor cooling over the next 1 to 3.5 hours."""
+    try:
+        result = api("POST", "/services/weather/get_forecasts?return_response=true",
+                     {"entity_id": WEATHER, "type": "hourly"})
+        hourly = (result or {}).get("service_response", {}).get(WEATHER, {}).get("forecast", [])
+        now = datetime.now(timezone.utc)
+        temperatures = []
+        for item in hourly:
+            stamp = datetime.fromisoformat(item["datetime"].replace("Z", "+00:00"))
+            hours = (stamp - now).total_seconds() / 3600
+            temp = val(item.get("temperature"))
+            if 1 <= hours <= 3.5 and temp is not None:
+                temperatures.append(temp)
+        return max(0.0, current_outdoor - min(temperatures)) if temperatures else None
+    except (RuntimeError, ValueError, TypeError, KeyError, AttributeError) as exc:
+        LOG.warning("Prévisions indisponibles: %s", exc)
+        return None
+
+
+def weather_bonus(cooling, demand, max_boost):
+    if cooling is None or demand.valid < 8 or demand.count == 0:
+        return 0.0
+    if cooling >= 4.0:
+        return min(1.0, max_boost)
+    if cooling >= 2.0:
+        return min(0.5, max_boost)
+    return 0.0
+
+
 def round_half(value):
     return round(value * 2) / 2
 
 
-def decide(demand, previous, opts):
+def decide(demand, previous, opts, anticipation=0.0):
     # V1: empirical heuristic only; Diematic retains weather compensation.
-    raw = 18.5 + 2.25 * min(demand.max_gap, 2.5) + 0.3 * min(demand.count, 4)
+    raw = 18.5 + 2.25 * min(demand.max_gap, 2.5) + 0.3 * min(demand.count, 4) + anticipation
     raw = min(opts["maximum_virtual"], max(opts["minimum_virtual"], raw))
     if previous is None:
         previous = min(opts["maximum_virtual"], max(opts["minimum_virtual"], opts["manual_day"]))
@@ -166,6 +200,8 @@ class Controller:
         self.last_command = None
         self.touched = False
         self.was_allowed = False
+        self.last_forecast_check = 0
+        self.cached_cooling = None
 
     def restore(self):
         if not self.touched:
@@ -198,7 +234,17 @@ class Controller:
             return
         current = val(day["state"])
         previous = self.last_command if self.last_command is not None else current
-        proposed = decide(demand, previous, opts)
+        anticipation = 0.0
+        if opts["weather_anticipation"]:
+            now_forecast = time.monotonic()
+            if not self.last_forecast_check or now_forecast - self.last_forecast_check >= 900:
+                self.cached_cooling = forecast_cooling(val(outdoor["state"]))
+                self.last_forecast_check = now_forecast
+            anticipation = weather_bonus(self.cached_cooling, demand, opts["weather_max_boost"])
+        proposed = decide(demand, previous, opts, anticipation)
+        if opts["weather_anticipation"]:
+            LOG.info("Météo: refroidissement 1-3h=%s °C; bonus=+%.1f °C",
+                     self.cached_cooling, anticipation)
         LOG.info("zones_valides=%d demandes=%d ecart_max=%.2f priorite=%s départ=%.1f extérieur=%.1f"
                  " consigne_actuelle=%.1f consigne_proposée=%.1f pilotage=%s",
                  demand.valid, demand.count, demand.max_gap, demand.priority,
@@ -231,7 +277,7 @@ class Controller:
 def main():
     opts = read_options()
     LOG.info("Régulation C %s; démarrage en %s",
-             "V0.1.1", "SIMULATION" if opts.get("dry_run", True) or not opts.get("automatic_control") else "ACTIF")
+             "V0.1.2", "SIMULATION" if opts.get("dry_run", True) or not opts.get("automatic_control") else "ACTIF")
     controller = Controller(opts)
     try:
         while not STOP:

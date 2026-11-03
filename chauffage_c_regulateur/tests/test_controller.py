@@ -14,7 +14,8 @@ OPTS={"minimum_virtual":18.5,"maximum_virtual":23.0,
       "max_rise_per_write":1.0,"max_drop_per_write":0.5,
       "manual_day":21.0,"manual_night":19.0,
       "automatic_control":False,"dry_run":True,
-      "write_interval_seconds":120}
+      "write_interval_seconds":120,
+      "weather_anticipation":False,"weather_max_boost":1.0}
 
 def d(gap=0,count=0,valid=11):
     return app.Demand(valid=valid,count=count,max_gap=gap,
