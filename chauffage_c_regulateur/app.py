@@ -153,7 +153,10 @@ def decide(demand, previous, opts):
         previous = min(opts["maximum_virtual"], max(opts["minimum_virtual"], opts["manual_day"]))
     limit_up = max(0.5, float(opts["max_rise_per_write"]))
     limit_down = max(0.5, float(opts["max_drop_per_write"]))
-    return round_half(min(previous + limit_up, max(previous - limit_down, raw)))
+    stepped = min(previous + limit_up, max(previous - limit_down, raw))
+    # A manual override can start outside the configured bounds.
+    # Never propose a value outside the hard limits, even during ramp-down.
+    return round_half(min(opts["maximum_virtual"], max(opts["minimum_virtual"], stepped)))
 
 
 class Controller:
@@ -228,7 +231,7 @@ class Controller:
 def main():
     opts = read_options()
     LOG.info("Régulation C %s; démarrage en %s",
-             "V0.1.0", "SIMULATION" if opts.get("dry_run", True) or not opts.get("automatic_control") else "ACTIF")
+             "V0.1.1", "SIMULATION" if opts.get("dry_run", True) or not opts.get("automatic_control") else "ACTIF")
     controller = Controller(opts)
     try:
         while not STOP:

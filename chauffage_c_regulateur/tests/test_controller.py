@@ -27,6 +27,10 @@ class DemandTests(unittest.TestCase):
         self.assertEqual(app.decide(d(2.5,5),21.0,OPTS),22.0)
     def test_setpoint_bounded(self):
         self.assertLessEqual(app.decide(d(4.0,10),23.0,OPTS),23.0)
+    def test_manual_override_above_max_still_clamps(self):
+        self.assertEqual(app.decide(d(0.8,5),24.0,OPTS),23.0)
+    def test_manual_override_below_min_still_clamps(self):
+        self.assertEqual(app.decide(d(0.0,0),17.0,OPTS),18.5)
     def test_missing_temperature_ignored(self):
         item=d(valid=0)
         app.add_room(item,"Unavailable",None,21.5,True)
