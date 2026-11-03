@@ -79,17 +79,33 @@ class PredictiveTests(unittest.TestCase):
         app.add_room(item,"Salon",21.7,21.5,False)
         self.assertEqual(item.count,0)
         self.assertEqual(item.near_count,1)
-        self.assertEqual(app.weather_bonus(4.5,item,1.0),1.0)
+        self.assertEqual(app.weather_adjustment(-4.5,item,1.0),1.0)
         self.assertGreater(app.decide(item,19.0,OPTS,1.0),
                            app.decide(item,19.0,OPTS,0.0))
     def test_no_preheat_when_all_rooms_warm(self):
         item=d()
         app.add_room(item,"Salon",22.5,21.5,False)
-        self.assertEqual(app.weather_bonus(5.0,item,1.0),0.0)
+        self.assertEqual(app.weather_adjustment(-5.0,item,1.0),0.0)
     def test_no_preheat_without_forecast(self):
         item=d()
         app.add_room(item,"Salon",21.5,21.5,False)
-        self.assertEqual(app.weather_bonus(None,item,1.0),0.0)
+        self.assertEqual(app.weather_adjustment(None,item,1.0),0.0)
 
 if __name__=="__main__":
     unittest.main()
+
+class WarmingTests(unittest.TestCase):
+    def test_warming_reduces_virtual_setpoint(self):
+        item=d()
+        app.add_room(item,"Salon",21.6,21.5,False)
+        correction=app.weather_adjustment(4.5,item,1.0)
+        self.assertEqual(correction,-1.0)
+        self.assertLess(app.decide(item,21.0,OPTS,correction),app.decide(item,21.0,OPTS,0.0))
+    def test_no_reduction_when_room_is_cold(self):
+        item=d()
+        app.add_room(item,"Salon",20.0,21.5,True)
+        self.assertEqual(app.weather_adjustment(5.0,item,1.0),0.0)
+    def test_small_change_ignored(self):
+        item=d()
+        app.add_room(item,"Salon",21.5,21.5,False)
+        self.assertEqual(app.weather_adjustment(1.5,item,1.0),0.0)
