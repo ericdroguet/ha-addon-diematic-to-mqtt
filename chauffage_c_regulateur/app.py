@@ -105,6 +105,7 @@ class Demand:
     count: int = 0
     max_gap: float = 0
     priority: str = "Aucune"
+    near_count: int = 0
 
 
 def add_room(result, name, current, target, heating=False):
@@ -112,6 +113,8 @@ def add_room(result, name, current, target, heating=False):
         return
     result.valid += 1
     gap = target - current
+    if -0.35 <= gap <= 0.15:
+        result.near_count += 1
     if gap > 0.15 or (heating and gap > -0.2):
         result.count += 1
         score = max(0.2, gap)
@@ -166,7 +169,7 @@ def forecast_cooling(current_outdoor):
 
 
 def weather_bonus(cooling, demand, max_boost):
-    if cooling is None or demand.valid < 8 or demand.count == 0:
+    if cooling is None or demand.valid < 8 or (demand.count == 0 and demand.near_count == 0):
         return 0.0
     if cooling >= 4.0:
         return min(1.0, max_boost)
@@ -241,10 +244,11 @@ class Controller:
                 self.cached_cooling = forecast_cooling(val(outdoor["state"]))
                 self.last_forecast_check = now_forecast
             anticipation = weather_bonus(self.cached_cooling, demand, opts["weather_max_boost"])
+        baseline = decide(demand, previous, opts, 0.0)
         proposed = decide(demand, previous, opts, anticipation)
         if opts["weather_anticipation"]:
-            LOG.info("Météo: refroidissement 1-3h=%s °C; bonus=+%.1f °C",
-                     self.cached_cooling, anticipation)
+            LOG.info("Météo: refroidissement 1-3h=%s °C; zones_proches=%d; bonus=+%.1f °C; sans_météo=%.1f °C; avec_météo=%.1f °C",
+                     self.cached_cooling, demand.near_count, anticipation, baseline, proposed)
         LOG.info("zones_valides=%d demandes=%d ecart_max=%.2f priorite=%s départ=%.1f extérieur=%.1f"
                  " consigne_actuelle=%.1f consigne_proposée=%.1f pilotage=%s",
                  demand.valid, demand.count, demand.max_gap, demand.priority,
@@ -277,7 +281,7 @@ class Controller:
 def main():
     opts = read_options()
     LOG.info("Régulation C %s; démarrage en %s",
-             "V0.1.2", "SIMULATION" if opts.get("dry_run", True) or not opts.get("automatic_control") else "ACTIF")
+             "V0.1.3", "SIMULATION" if opts.get("dry_run", True) or not opts.get("automatic_control") else "ACTIF")
     controller = Controller(opts)
     try:
         while not STOP:
