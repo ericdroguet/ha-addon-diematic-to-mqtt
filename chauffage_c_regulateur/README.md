@@ -41,3 +41,9 @@ Il ne s'agit pas encore d'un modèle prédictif : le calcul réagit à la demand
 - Plafond configurable avec `weather_max_boost` (0 à 1 °C). Les bornes et limites de variation V1 restent actives.
 - Pas de bonus si les prévisions sont indisponibles, moins de 8 pièces valides ou aucune demande.
 - Vérifier d'abord en simulation (`dry_run: true`). La prise en compte du soleil et de l'inertie apprise viendra plus tard.
+
+## V0.1.3 — Pré-chauffage prédictif
+- Le refroidissement extérieur annoncé peut désormais déclencher un bonus même sans demande de chauffe, lorsqu'au moins une pièce se trouve à moins de 0,35 °C au-dessus de sa consigne.
+- Aucune anticipation si toutes les pièces sont confortablement au-dessus de leur consigne ; pas de préchauffage sans prévisions.
+- Les journaux affichent les consignes sans météo et avec météo (après limitation de vitesse), et le nombre de zones proches de leur consigne.
+- L'option météo reste désactivée par défaut pour une installation sans surprise ; activer explicitement `weather_anticipation`.
