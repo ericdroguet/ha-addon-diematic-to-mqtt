@@ -28,7 +28,7 @@ class DemandTests(unittest.TestCase):
     def test_setpoint_bounded(self):
         self.assertLessEqual(app.decide(d(4.0,10),23.0,OPTS),23.0)
     def test_missing_temperature_ignored(self):
-        item=d()
+        item=d(valid=0)
         app.add_room(item,"Unavailable",None,21.5,True)
         self.assertEqual(item.valid,0)
     def test_heating_at_threshold_counts(self):
