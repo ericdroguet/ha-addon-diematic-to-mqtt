@@ -1,0 +1,24 @@
+name: Test régulateur chauffage C
+on:
+  push:
+    branches:
+      - "feature/chauffage-c-regulateur-independant"
+    paths:
+      - "chauffage_c_regulateur/**"
+      - ".github/workflows/test-chauffage-c.yml"
+  pull_request:
+    paths:
+      - "chauffage_c_regulateur/**"
+      - ".github/workflows/test-chauffage-c.yml"
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Vérification Python
+        run: python -m compileall -q chauffage_c_regulateur
+      - name: Tests de régulation
+        run: python -m unittest discover -s chauffage_c_regulateur/tests -v
