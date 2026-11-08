@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from urllib import request, error
 from fuel_monitor import FuelMonitor
+from stability import Stabilizer
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 LOG = logging.getLogger("chauffage_c")
@@ -387,6 +388,7 @@ class Controller:
         self.last_cycle = time.monotonic()
         self.last_save = 0
         self.last_discovery = 0
+        self.stabilizer = Stabilizer(mqtt_publish)
         try:
             with open("/data/thermal_state.json", encoding="utf-8") as f:
                 self.deficits = {str(k): min(7200.0, max(0.0, float(v)))
@@ -474,6 +476,9 @@ class Controller:
         safe = (demand.valid >= 8 and good_numbers and mode is not None
                 and mode.get("state") == "AUTO" and val(departure["state"]) <= 60)
         if not safe:
+            self.stabilizer.reset_pending(reset_filter=True)
+            self.stabilizer.status = "pause sécurité"
+            self.stabilizer.publish()
             LOG.warning("SÉCURITÉ: mesures=%s, mode=%s, départ=%s; restauration si nécessaire",
                         demand.valid, mode.get("state") if mode else None,
                         departure.get("state") if departure else None)
@@ -481,7 +486,9 @@ class Controller:
                 self.restore()
             return
         current = val(day["state"])
-        previous = self.last_command if self.last_command is not None else current
+        # Use the actual Diematic setting rather than an old issued command;
+        # manual changes and startup restoration must be reflected immediately.
+        previous = current
         anticipation = 0.0
         if opts["weather_anticipation"]:
             now_forecast = time.monotonic()
@@ -523,33 +530,38 @@ class Controller:
                      round(demand.next_setback_minutes) if demand.next_setback_minutes is not None else "-",
                      ",".join(demand.preheat_rooms) or "-", ",".join(demand.setback_rooms) or "-")
         if not control:
+            self.stabilizer.reset_pending(reset_filter=True)
+            self.stabilizer.status = "simulation (sans écriture)"
+            self.stabilizer.publish()
             if self.touched:
                 self.restore()
             return
         now = time.monotonic()
-        if self.last_write and now - self.last_write < opts["write_interval_seconds"]:
+        self.stabilizer.observe(time.time(), elapsed, demand.gaps, enabled=True)
+        target = self.stabilizer.plan(now, proposed, current, val(night["state"]),
+                                      demand.actual_max_gap, opts)
+        self.stabilizer.publish()
+        if target is None:
             return
-        if current is None:
-            return
-        if abs(proposed - current) < 0.49 and abs(proposed - val(night["state"])) < 0.49:
-            self.last_command = proposed
-            return
-        call_number(ZONE_DAY, proposed)
+        call_number(ZONE_DAY, target)
         self.touched = True
         try:
-            call_number(ZONE_NIGHT, proposed)
+            call_number(ZONE_NIGHT, target)
         except Exception:
+            self.stabilizer.reset_pending(reset_filter=True)
             self.restore()
             raise
-        self.last_command = proposed
+        self.last_command = target
         self.last_write = now
-        LOG.warning("Consigne Diematic jour/nuit -> %.1f °C (via HA uniquement)", proposed)
+        self.stabilizer.committed(now, current, target)
+        self.stabilizer.publish(force=True)
+        LOG.warning("Consigne Diematic jour/nuit -> %.1f °C (filtrage 5 min / confirmation 10 min)", target)
 
 
 def main():
     opts = read_options()
     LOG.info("Régulation C %s; démarrage en %s",
-             "V0.3.2", "SIMULATION" if opts.get("dry_run", True) or not opts.get("automatic_control") else "ACTIF")
+             "V0.3.3", "SIMULATION" if opts.get("dry_run", True) or not opts.get("automatic_control") else "ACTIF")
     controller = Controller(opts)
     fioul = FuelMonitor(api, state, mqtt_publish)
     try:
