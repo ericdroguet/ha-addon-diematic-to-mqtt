@@ -113,10 +113,12 @@ class FuelMonitor:
         for series in data:
             if not isinstance(series, list):
                 continue
+            series_entity = next((item.get("entity_id") for item in series
+                                  if isinstance(item, dict) and item.get("entity_id")), None)
             for reading in series:
                 if not isinstance(reading, dict):
                     continue
-                entity = reading.get("entity_id")
+                entity = reading.get("entity_id") or series_entity
                 stage = next((key for key, item in STAGES.items() if item[0] == entity), None)
                 if not stage:
                     continue
