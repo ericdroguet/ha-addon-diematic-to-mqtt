@@ -1,5 +1,5 @@
 name: "Régulation intelligente - Circuit C"
-version: "0.3.2"
+version: "0.3.3"
 slug: "chauffage_c_regulateur"
 description: "Régulation indépendante du circuit C à partir des thermostats Danfoss et Eve"
 url: "https://github.com/ericdroguet/ha-addon-diematic-to-mqtt"
@@ -27,6 +27,9 @@ options:
   schedule_preheat_minutes: 120
   schedule_setback_minutes: 45
   weather_max_boost: 1.5
+  stability_filter_minutes: 5
+  stability_confirm_minutes: 10
+  stability_emergency_gap: 1.2
 schema:
   automatic_control: bool
   dry_run: bool
@@ -43,3 +46,6 @@ schema:
   schedule_preheat_minutes: "int(30,240)"
   schedule_setback_minutes: "int(0,120)"
   weather_max_boost: "float(0,1.5)"
+  stability_filter_minutes: "int(1,15)"
+  stability_confirm_minutes: "int(2,30)"
+  stability_emergency_gap: "float(0.7,3.0)"
