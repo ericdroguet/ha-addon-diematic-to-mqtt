@@ -39,6 +39,8 @@ class Stabilizer:
         self.filtered = None
         self.status = "démarrage"
         self.pending_seconds = 0
+        # Une seule reprise immédiate au démarrage, pas après une pause sécurité.
+        self.startup_pending = True
         try:
             with open(FILE, encoding="utf-8") as f:
                 saved = json.load(f)
@@ -68,8 +70,13 @@ class Stabilizer:
         confirm_s = max(120, float(opts.get("stability_confirm_minutes", 10)) * 60)
         emergency_gap = max(0.7, float(opts.get("stability_emergency_gap", 1.2)))
         min_write = max(60, float(opts["write_interval_seconds"]))
+        # À l'ouverture de l'add-on, les consignes Diematic sont déjà l'état
+        # réel de sécurité. Ne pas attendre 5 + 10 minutes avant de reprendre
+        # le contrôle ; les petites évolutions suivantes restent temporisées.
+        startup_immediate = self.startup_pending and self.first_sample_time is None
         if self.first_sample_time is None:
-            self.first_sample_time = now
+            self.first_sample_time = now - filter_s if startup_immediate else now
+        self.startup_pending = False
         self.samples.append((now, raw_target))
         while len(self.samples) > 1 and now - self.samples[0][0] > filter_s:
             self.samples.popleft()
@@ -99,6 +106,10 @@ class Stabilizer:
         if urgent and candidate > day + 0.49:
             self.reset_pending()
             self.status = "rattrapage prioritaire"
+            return candidate
+        if startup_immediate:
+            self.reset_pending()
+            self.status = "reprise immédiate après redémarrage"
             return candidate
         direction = 1 if candidate > day + 0.49 else -1 if candidate < day - 0.49 else 0
         if direction != self.pending_direction:
