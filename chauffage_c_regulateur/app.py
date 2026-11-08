@@ -131,6 +131,9 @@ def read_options():
     opts["schedule_preheat_minutes"] = max(30, min(240, int(opts.get("schedule_preheat_minutes", 120))))
     opts["schedule_setback_minutes"] = max(0, min(120, int(opts.get("schedule_setback_minutes", 45))))
     opts["weather_max_boost"] = max(0.0, min(1.5, float(opts.get("weather_max_boost", 1.5))))
+    opts["stability_filter_minutes"] = max(1, min(15, int(opts.get("stability_filter_minutes", 5))))
+    opts["stability_confirm_minutes"] = max(2, min(30, int(opts.get("stability_confirm_minutes", 10))))
+    opts["stability_emergency_gap"] = max(0.7, min(3.0, float(opts.get("stability_emergency_gap", 1.2))))
     return opts
 
 
