@@ -15,6 +15,7 @@ BASE = "http://supervisor/core/api"
 TOKEN = os.environ.get("SUPERVISOR_TOKEN", "")
 ROOMS = (
     "climate.sejour",
+    "climate.salon_tv",
     "climate.cuisine_2",
     "climate.entree",
     "climate.bureau",
@@ -339,7 +340,7 @@ class Controller:
 def main():
     opts = read_options()
     LOG.info("Régulation C %s; démarrage en %s",
-             "V0.2.0", "SIMULATION" if opts.get("dry_run", True) or not opts.get("automatic_control") else "ACTIF")
+             "V0.2.1", "SIMULATION" if opts.get("dry_run", True) or not opts.get("automatic_control") else "ACTIF")
     controller = Controller(opts)
     try:
         while not STOP:
