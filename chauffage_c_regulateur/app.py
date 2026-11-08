@@ -6,7 +6,8 @@ import signal
 import sys
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from urllib import request, error
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -38,6 +39,10 @@ ZONE_MODE = "select.zone_c_mode"
 ZONE_DEPARTURE = "sensor.zone_c_departure_temp"
 OUTDOOR = "sensor.ext_temp"
 WEATHER = "weather.forecast_maison"
+HOUSE_MODE = "select.meylan_house_mode"
+HOUSE_STATE = "sensor.meylan_house_state"
+LOCAL_TZ = ZoneInfo("Europe/Paris")
+WEEKDAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
 STOP = False
 
 
@@ -96,6 +101,9 @@ def read_options():
     opts["poll_seconds"] = max(15, int(opts["poll_seconds"]))
     opts["write_interval_seconds"] = max(60, int(opts["write_interval_seconds"]))
     opts["weather_anticipation"] = bool(opts.get("weather_anticipation", False))
+    opts["schedule_anticipation"] = bool(opts.get("schedule_anticipation", False))
+    opts["schedule_preheat_minutes"] = max(30, min(240, int(opts.get("schedule_preheat_minutes", 120))))
+    opts["schedule_setback_minutes"] = max(0, min(120, int(opts.get("schedule_setback_minutes", 45))))
     opts["weather_max_boost"] = max(0.0, min(1.5, float(opts.get("weather_max_boost", 1.5))))
     return opts
 
@@ -108,6 +116,12 @@ class Demand:
     priority: str = "Aucune"
     near_count: int = 0
     gaps: list = field(default_factory=list)
+    preheat_rooms: list = field(default_factory=list)
+    setback_rooms: list = field(default_factory=list)
+    next_comfort_minutes: float | None = None
+    next_setback_minutes: float | None = None
+    actual_max_gap: float = 0.0
+    schedule_enabled: bool = False
 
 
 def add_room(result, name, current, target, heating=False):
@@ -126,21 +140,120 @@ def add_room(result, name, current, target, heating=False):
             result.priority = name
 
 
-def collect():
+def schedule_transitions(attributes, now):
+    """Minutes to next Comfort / Reduced switch, per-room weekly schedule.
+    
+    Home Assistant exposes the Danfoss schedule as 'HH:MM-HH:MM' comfort
+    windows; 24:00 is a valid end and windows may cross midnight.
+    """
+    schedule = attributes.get("schedule")
+    if not isinstance(schedule, dict):
+        return None, None
+    windows = []
+    for offset in range(-1, 3):
+        day = now.date() + timedelta(days=offset)
+        intervals = schedule.get(WEEKDAYS[day.weekday()], [])
+        if not isinstance(intervals, list):
+            continue
+        midnight = datetime.combine(day, datetime.min.time(), tzinfo=LOCAL_TZ)
+        for period in intervals:
+            if not isinstance(period, str):
+                continue
+            try:
+                begin, end = period.split("-")
+                h0, m0 = (int(x) for x in begin.split(":"))
+                h1, m1 = (int(x) for x in end.split(":"))
+                if not (0 <= h0 <= 23 and 0 <= m0 < 60
+                        and 0 <= h1 <= 24 and 0 <= m1 < 60
+                        and (h1 < 24 or m1 == 0)):
+                    continue
+                first, last = h0 * 60 + m0, h1 * 60 + m1
+                if last <= first:
+                    last += 1440
+                windows.append((midnight + timedelta(minutes=first),
+                                midnight + timedelta(minutes=last)))
+            except (ValueError, TypeError):
+                continue
+    now_ts = now.timestamp()
+    current_end = [end.timestamp() for start, end in windows
+                   if start.timestamp() <= now_ts < end.timestamp()]
+    future_starts = [start.timestamp() for start, end in windows
+                     if start.timestamp() > now_ts]
+    if current_end:
+        return None, (min(current_end) - now_ts) / 60
+    return ((min(future_starts) - now_ts) / 60 if future_starts else None), None
+
+
+def adjust_for_schedule(attributes, current, target, now, opts, demand):
+    """Apply a gentle prospective demand, never change a Danfoss setpoint.
+
+    During Reduced, ramp toward the *future* comfort target up to two hours
+    ahead. Near the end of Comfort, taper this room's demand toward Reduced.
+    Every other room retains its own contribution and the boiler safety
+    constraints remain unchanged.
+    """
+    next_comfort, next_setback = schedule_transitions(attributes, now)
+    comfort = val(attributes.get("at_home_setpoint"))
+    reduced = val(attributes.get("away_setpoint"))
+    if comfort is None or reduced is None or comfort <= reduced + 0.3:
+        return target, False
+    if next_comfort is not None:
+        if demand.next_comfort_minutes is None or next_comfort < demand.next_comfort_minutes:
+            demand.next_comfort_minutes = next_comfort
+        window = opts["schedule_preheat_minutes"]
+        if 0 <= next_comfort < window and comfort > target + 0.3:
+            progress = (window - next_comfort) / window
+            predictive_gap = max(0.0, comfort - current) * progress
+            if predictive_gap > max(0.0, target - current) + 0.05:
+                demand.preheat_rooms.append(attributes.get("friendly_name", "?"))
+                return max(target, current + predictive_gap), False
+    if next_setback is not None:
+        if demand.next_setback_minutes is None or next_setback < demand.next_setback_minutes:
+            demand.next_setback_minutes = next_setback
+        window = opts["schedule_setback_minutes"]
+        if 0 < next_setback < window and target > reduced + 0.3:
+            gap = max(0.0, target - current)
+            reduced_gap = max(0.0, reduced - current)
+            fade = 0.35 + 0.65 * next_setback / window
+            projected_gap = max(reduced_gap, gap * fade)
+            if projected_gap < gap - 0.05:
+                demand.setback_rooms.append(attributes.get("friendly_name", "?"))
+                return current + projected_gap, True
+    return target, False
+
+
+def collect(opts=None):
+    opts = opts or {}
     result = Demand()
+    enabled = opts.get("schedule_anticipation", False)
+    if enabled:
+        house_mode = state(HOUSE_MODE)
+        house_state = state(HOUSE_STATE)
+        result.schedule_enabled = bool(
+            house_mode and house_mode.get("state") == "schedule"
+            and house_state and house_state.get("state") == "at_home"
+        )
+    now = datetime.now(LOCAL_TZ)
     for room in ROOMS:
         record = state(room)
         if not record or record.get("state") not in ("auto", "heat"):
             continue
         attrs = record.get("attributes", {})
-        add_room(
-            result, attrs.get("friendly_name", room),
-            val(attrs.get("current_temperature")), val(attrs.get("temperature")),
-            attrs.get("hvac_action") == "heating",
-        )
+        current = val(attrs.get("current_temperature"))
+        target = val(attrs.get("temperature"))
+        if current is None or target is None:
+            continue
+        result.actual_max_gap = max(result.actual_max_gap, target - current)
+        heating = attrs.get("hvac_action") == "heating"
+        if result.schedule_enabled and record.get("state") == "auto" and attrs.get("room_state") == "Normal":
+            target, fade_heating = adjust_for_schedule(attrs, current, target, now, opts, result)
+            if fade_heating:
+                heating = False
+        add_room(result, attrs.get("friendly_name", room), current, target, heating)
     eve = state(EVE_ROOM)
     thermometer = state(EVE_SENSOR)
     if eve and thermometer and eve.get("state") == "heat":
+        result.actual_max_gap = max(result.actual_max_gap, (val(eve.get("attributes", {}).get("temperature")) or 0) - (val(thermometer.get("state")) or 0))
         valves = [state(e) for e in EVE_VALVES]
         opening = any(v and val(v.get("state")) is not None
                       and val(v["state"]) > 5 for v in valves)
@@ -184,7 +297,7 @@ def weather_adjustment(change, outdoor, demand, max_boost):
     if change is None or outdoor is None or demand.valid < 8:
         return 0.0
     correction = max(-max_boost, min(max_boost, 0.12 * (10 - outdoor) - 0.30 * change))
-    if demand.max_gap > 0.5:
+    if demand.actual_max_gap > 0.5:
         correction = max(0.0, correction)
     return correction
 
@@ -266,7 +379,7 @@ class Controller:
     def cycle(self):
         opts = self.opts
         control = bool(opts.get("automatic_control", False)) and not bool(opts.get("dry_run", True))
-        demand = collect()
+        demand = collect(opts)
         now_cycle = time.monotonic()
         elapsed = max(0.0, min(120.0, now_cycle - self.last_cycle))
         self.last_cycle = now_cycle
@@ -313,6 +426,13 @@ class Controller:
                  val(departure["state"]), val(outdoor["state"]), current, proposed,
                  "ACTIF" if control else "SIMULATION")
         LOG.info("Rattrapage: indice_persistance=%.2f; zones_en_demande=%d", persistence, demand.count)
+        if opts.get("schedule_anticipation"):
+            LOG.info("Planning: %s; prochain_confort=%s min; prochain_réduit=%s min; "
+                     "préchauffage=%s; réduction_anticipée=%s",
+                     "ACTIF" if demand.schedule_enabled else "SUSPENDU (mode maison)",
+                     round(demand.next_comfort_minutes) if demand.next_comfort_minutes is not None else "-",
+                     round(demand.next_setback_minutes) if demand.next_setback_minutes is not None else "-",
+                     ",".join(demand.preheat_rooms) or "-", ",".join(demand.setback_rooms) or "-")
         if not control:
             if self.touched:
                 self.restore()
@@ -340,7 +460,7 @@ class Controller:
 def main():
     opts = read_options()
     LOG.info("Régulation C %s; démarrage en %s",
-             "V0.2.1", "SIMULATION" if opts.get("dry_run", True) or not opts.get("automatic_control") else "ACTIF")
+             "V0.3.0", "SIMULATION" if opts.get("dry_run", True) or not opts.get("automatic_control") else "ACTIF")
     controller = Controller(opts)
     try:
         while not STOP:
