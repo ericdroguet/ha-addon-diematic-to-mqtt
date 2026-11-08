@@ -564,7 +564,7 @@ class Controller:
 def main():
     opts = read_options()
     LOG.info("Régulation C %s; démarrage en %s",
-             "V0.3.3", "SIMULATION" if opts.get("dry_run", True) or not opts.get("automatic_control") else "ACTIF")
+             "V0.3.4", "SIMULATION" if opts.get("dry_run", True) or not opts.get("automatic_control") else "ACTIF")
     controller = Controller(opts)
     fioul = FuelMonitor(api, state, mqtt_publish)
     try:
@@ -584,10 +584,22 @@ def main():
                 time.sleep(1)
     finally:
         if controller.touched:
-            try:
-                controller.restore()
-            except Exception:
-                LOG.exception("Arrêt: restauration impossible")
+            # Un SIGTERM est attendu lors d'une mise à jour / d'un redémarrage.
+            # Laisser la Diematic avec sa dernière consigne sûre, plutôt que
+            # d'imposer 21/19 pendant l'initialisation de la version suivante.
+            # En cas d'arrêt non sollicité, conserver le repli de sécurité.
+            orderly_active_stop = (
+                STOP and opts.get("automatic_control", False)
+                and not opts.get("dry_run", True)
+            )
+            if orderly_active_stop:
+                LOG.warning("Arrêt contrôlé: dernières consignes Diematic conservées; "
+                            "pas de retour provisoire à 21/19 °C")
+            else:
+                try:
+                    controller.restore()
+                except Exception:
+                    LOG.exception("Arrêt: restauration impossible")
 
 
 if __name__ == "__main__":
