@@ -39,6 +39,14 @@ ZONE_MODE = "select.zone_c_mode"
 ZONE_DEPARTURE = "sensor.zone_c_departure_temp"
 OUTDOOR = "sensor.ext_temp"
 WEATHER = "weather.forecast_maison"
+INFLUENCE_ENTITY = "input_number.circuit_c_influence_pieces"
+WEATHER_LIMIT_ENTITY = "input_number.circuit_c_correction_meteo_maximale"
+METRIC_PREFIX = "chauffage_c"
+METRICS = (
+    ("meteo_calculee", "Météo calculée", "Correction météo plafonnée avant protection"),
+    ("meteo_retenue", "Météo retenue", "Correction après protection progressive des pièces"),
+    ("meteo_effet_consigne", "Effet météo sur consigne", "Différence entre consigne proposée avec et sans météo, après arrondi et limitation"),
+)
 HOUSE_MODE = "select.meylan_house_mode"
 HOUSE_STATE = "sensor.meylan_house_state"
 LOCAL_TZ = ZoneInfo("Europe/Paris")
@@ -89,6 +97,22 @@ def call_number(entity, temperature):
     api("POST", "/services/number/set_value", {
         "entity_id": entity, "value": temperature
     })
+
+
+def live_setting(entity, default, minimum, maximum):
+    """Read the current HA helper at every cycle; fall back safely if absent."""
+    record = state(entity)
+    value = val(record.get("state")) if record else None
+    if value is None:
+        return default
+    return min(maximum, max(minimum, value))
+
+
+def mqtt_publish(topic, payload, retain=False):
+    api("POST", "/services/mqtt/publish", {
+        "topic": topic, "payload": payload, "retain": retain
+    })
+
 
 
 def read_options():
@@ -294,12 +318,20 @@ def forecast_change(current_outdoor):
 
 
 def weather_adjustment(change, outdoor, demand, max_boost):
+    """Return (calculated, protected, protection_factor).
+
+    The old rule cancelled all negative weather effects as soon as any
+    room deficit exceeded 0.5C. Instead, protect comfort progressively:
+    for each 1C beyond that threshold the negative correction is halved
+    again, but retain at least 25% of the forecast's contribution.
+    """
     if change is None or outdoor is None or demand.valid < 8:
-        return 0.0
-    correction = max(-max_boost, min(max_boost, 0.12 * (10 - outdoor) - 0.30 * change))
-    if demand.actual_max_gap > 0.5:
-        correction = max(0.0, correction)
-    return correction
+        return None, 0.0, 1.0
+    calculated = max(-max_boost, min(max_boost, 0.12 * (10 - outdoor) - 0.30 * change))
+    if calculated >= 0:
+        return calculated, calculated, 1.0
+    factor = max(0.25, 1.0 - 0.5 * max(0.0, demand.actual_max_gap - 0.5))
+    return calculated, calculated * factor, factor
 
 
 def persistent_index(demand, deficits, elapsed):
@@ -329,7 +361,7 @@ def round_half(value):
 def decide(demand, previous, opts, anticipation=0.0, persistence=0.0):
     gaps = sorted((gap for _, gap in demand.gaps), reverse=True)
     representative = (0.5 * gaps[0] + 0.5 * sum(gaps[:3]) / min(3, len(gaps))) if gaps else 0.0
-    raw = (20.5 + 1.5 * min(representative, 2.0)
+    raw = (20.5 + opts.get("room_influence", 1.5) * min(representative, 2.0)
            + 0.25 * min(demand.count, 8)
            + 0.8 * persistence + anticipation)
     raw = min(opts["maximum_virtual"], max(opts["minimum_virtual"], raw))
@@ -353,6 +385,7 @@ class Controller:
         self.deficits = {}
         self.last_cycle = time.monotonic()
         self.last_save = 0
+        self.last_discovery = 0
         try:
             with open("/data/thermal_state.json", encoding="utf-8") as f:
                 self.deficits = {str(k): min(7200.0, max(0.0, float(v)))
@@ -366,6 +399,46 @@ class Controller:
         with open(temp, "w", encoding="utf-8") as f:
             json.dump({"deficits": self.deficits}, f)
         os.replace(temp, path)
+
+    def publish_weather_metrics(self, calculated, retained, real_effect):
+        """Expose real, recorder-backed MQTT sensors through HA discovery.
+
+        Metrics are informational only. A failed telemetry publish must
+        never interrupt the boiler's normal regulation loop.
+        """
+        try:
+            now = time.monotonic()
+            if not self.last_discovery or now - self.last_discovery >= 3600:
+                for key, name, description in METRICS:
+                    topic = f"homeassistant/sensor/{METRIC_PREFIX}_{key}/config"
+                    data = {
+                        "name": name,
+                        "object_id": f"{METRIC_PREFIX}_{key}",
+                        "default_entity_id": f"sensor.{METRIC_PREFIX}_{key}",
+                        "unique_id": f"{METRIC_PREFIX}_{key}",
+                        "state_topic": f"{METRIC_PREFIX}/diagnostics/{key}",
+                        "unit_of_measurement": "°C",
+                        "state_class": "measurement",
+                        "expire_after": 180,
+                        "entity_category": "diagnostic",
+                        "device": {
+                            "identifiers": ["chauffage_c_regulateur"],
+                            "name": "Régulation intelligente - Circuit C",
+                            "manufacturer": "Régulation locale",
+                            "model": "Circuit C",
+                        },
+                    }
+                    mqtt_publish(topic, json.dumps(data, ensure_ascii=False), True)
+                self.last_discovery = now
+            values = (calculated, retained, real_effect)
+            for (key, _, _), value in zip(METRICS, values):
+                mqtt_publish(
+                    f"{METRIC_PREFIX}/diagnostics/{key}",
+                    "unknown" if value is None else f"{value:+.3f}",
+                    False,
+                )
+        except Exception as exc:
+            LOG.warning("Télémétrie MQTT indisponible: %s", exc)
 
     def restore(self):
         if not self.touched:
@@ -414,12 +487,27 @@ class Controller:
             if not self.last_forecast_check or now_forecast - self.last_forecast_check >= 900:
                 self.cached_change = forecast_change(val(outdoor["state"]))
                 self.last_forecast_check = now_forecast
-            anticipation = weather_adjustment(self.cached_change, val(outdoor["state"]), demand, opts["weather_max_boost"])
-        baseline = decide(demand, previous, opts, 0.0, persistence)
-        proposed = decide(demand, previous, opts, anticipation, persistence)
+            # Correction computed below with the current dashboard setting.
+        live_opts = dict(opts)
+        live_opts["room_influence"] = live_setting(INFLUENCE_ENTITY, 1.5, 0.5, 3.0)
+        live_limit = live_setting(WEATHER_LIMIT_ENTITY, opts["weather_max_boost"], 0.0, 1.5)
         if opts["weather_anticipation"]:
-            LOG.info("Météo: variation prévue pondérée 1-6h=%s °C; zones_proches=%d; correction=%+.1f °C; sans_météo=%.1f °C; avec_météo=%.1f °C",
-                     self.cached_change, demand.near_count, anticipation, baseline, proposed)
+            calculated, anticipation, protection = weather_adjustment(
+                self.cached_change, val(outdoor["state"]), demand, live_limit
+            )
+        else:
+            calculated, protection = None, 1.0
+        baseline = decide(demand, previous, live_opts, 0.0, persistence)
+        proposed = decide(demand, previous, live_opts, anticipation, persistence)
+        effect = round(proposed - baseline, 3)
+        self.publish_weather_metrics(calculated, anticipation if calculated is not None else None,
+                                     effect if calculated is not None else None)
+        if opts["weather_anticipation"]:
+            LOG.info("Météo: variation prévue pondérée 1-6h=%s °C; zones_proches=%d; calculée=%s °C; protégée=%+.2f °C; facteur=%.2f; effet_consigne=%+.2f °C; influence_pièces=%.1f; plafond_météo=%.1f; sans_météo=%.1f °C; avec_météo=%.1f °C",
+                     self.cached_change, demand.near_count,
+                     f"{calculated:+.2f}" if calculated is not None else "indisponible",
+                     anticipation, protection, effect, live_opts["room_influence"], live_limit,
+                     baseline, proposed)
         LOG.info("zones_valides=%d demandes=%d ecart_max=%.2f priorite=%s départ=%.1f extérieur=%.1f"
                  " consigne_actuelle=%.1f consigne_proposée=%.1f pilotage=%s",
                  demand.valid, demand.count, demand.max_gap, demand.priority,
@@ -460,7 +548,7 @@ class Controller:
 def main():
     opts = read_options()
     LOG.info("Régulation C %s; démarrage en %s",
-             "V0.3.0", "SIMULATION" if opts.get("dry_run", True) or not opts.get("automatic_control") else "ACTIF")
+             "V0.3.1", "SIMULATION" if opts.get("dry_run", True) or not opts.get("automatic_control") else "ACTIF")
     controller = Controller(opts)
     try:
         while not STOP:
