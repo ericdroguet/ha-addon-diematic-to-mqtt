@@ -50,6 +50,7 @@ class Stabilizer:
     def reset_pending(self, reset_filter=False):
         self.pending_direction = None
         self.pending_since = None
+        self.pending_seconds = 0
         if reset_filter:
             self.samples.clear()
             self.first_sample_time = None
@@ -185,6 +186,7 @@ class Stabilizer:
                         "default_entity_id": "sensor.chauffage_c_" + key,
                         "unique_id": "chauffage_c_" + key,
                         "state_topic": STATS_TOPIC + "/" + key,
+                        "expire_after": 600,
                         "device": {
                             "identifiers": ["chauffage_c_regulateur"],
                             "name": "Régulation intelligente - Circuit C",
