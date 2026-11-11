@@ -83,8 +83,8 @@ class PredictiveTests(unittest.TestCase):
         self.assertEqual(item.count,0)
         self.assertEqual(item.near_count,1)
         self.assertEqual(app.weather_adjustment(-4.5, 8.0, item, 1.0)[1], 1.0)
-        self.assertGreater(app.decide(item,19.0,OPTS,1.0),
-                           app.decide(item,19.0,OPTS,0.0))
+        self.assertGreater(app.decide(item,21.0,OPTS,1.0),
+                           app.decide(item,21.0,OPTS,0.0))
     def test_no_preheat_when_all_rooms_warm(self):
         item=d()
         app.add_room(item,"Salon",22.5,21.5,False)
