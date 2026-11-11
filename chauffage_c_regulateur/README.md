@@ -2,6 +2,43 @@
 
 **Application indépendante de Diematic to MQTT** : aucun code Modbus, aucune modification de la passerelle existante.
 
+## V0.3.5 — Diagnostics de confort par pièce (comparaison, sans déploiement automatique)
+
+Cette version cherche à préserver les économies **sans surchauffer toute la maison
+à cause d'une pièce localement déficitaire** (notamment le Salon TV).
+Elle n'infère pas la cause d'un déficit : vérifier séparément circulation,
+radiateur, tête thermostatique et pont thermique.
+
+- `comfort_guard_enabled: false` **par défaut**. L'algorithme V0.3.4
+  continue d'envoyer **exactement ses propres décisions** à la Diematic.
+  La nouvelle consigne est uniquement calculée à titre comparatif.
+- **Déficit local** : une seule pièce présentant au moins 0,5 °C
+  de déficit pendant 60 minutes et au moins 8 zones valides. La proposition
+  V0.3.5 plafonne l'influence supplémentaire de cette pièce dans le calcul,
+  sans supprimer sa demande de chauffage.
+- **Déficit collectif** : deux pièces ou davantage présentant au moins
+  0,5 °C de déficit pendant 45 minutes. Sur les 15 minutes suivantes, la
+  nouvelle proposition supprime progressivement la correction météo négative.
+  Toute correction météo positive reste disponible.
+- **Hystérésis météo de 15 minutes** : une nouvelle réduction météo doit
+  persister avant d'être appliquée ; un réchauffement de la consigne est
+  immédiat dans la proposition V0.3.5.
+- Les capteurs MQTT `sensor.chauffage_c_mode_confort`,
+  `sensor.chauffage_c_deficit_pieces_24h` et
+  `sensor.chauffage_c_ecart_simulation_v035` enregistrent les diagnostics
+  à intervalles de cinq minutes. Les attributs du déficit contiennent un
+  classement par pièce, les deux propositions de consigne et leurs corrections
+  météo. Ces valeurs sont indicatives, pas des preuves d'une panne physique.
+- Le suivi des déficits est conservé dans `/data/thermal_state.json`.
+  L'algorithme, la loi d'eau et les plannings des têtes thermostatiques
+  existants ne sont pas modifiés par le mode comparatif.
+
+Pour tester : mettre à jour l'add-on sur une installation de test, conserver
+`comfort_guard_enabled: false` et comparer les capteurs au moins 48 à 72 h.
+**Ne pas activer le mode de pilotage V0.3.5 sans avoir validé les journaux,
+l'équilibrage thermique et la sécurité de la chaudière.** Aucun automatisme
+ne réalise cette activation à votre place.
+
 ## Principe
 Cette application consulte les thermostats Danfoss Link et Eve via l'API Home Assistant, estime la demande globale et ajuste **uniquement** les deux consignes d'ambiance de la zone C : `number.zone_c_temp_day` et `number.zone_c_temp_night`. La loi d'eau, la vanne mélangeuse et la chaudière restent contrôlées par Diematic.
 
