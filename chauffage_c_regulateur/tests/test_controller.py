@@ -4,6 +4,9 @@ import unittest
 from unittest.mock import patch
 
 PATH=pathlib.Path(__file__).resolve().parents[1] / "app.py"
+# Les imports internes de l’add-on doivent être accessibles pendant les tests.
+import sys
+sys.path.insert(0, str(PATH.parent))
 spec=importlib.util.spec_from_file_location("heating_controller", PATH)
 app=importlib.util.module_from_spec(spec)
 import sys
@@ -79,17 +82,18 @@ class PredictiveTests(unittest.TestCase):
         app.add_room(item,"Salon",21.7,21.5,False)
         self.assertEqual(item.count,0)
         self.assertEqual(item.near_count,1)
-        self.assertEqual(app.weather_adjustment(-4.5,item,1.0),1.0)
+        self.assertEqual(app.weather_adjustment(-4.5, 8.0, item, 1.0)[1], 1.0)
         self.assertGreater(app.decide(item,19.0,OPTS,1.0),
                            app.decide(item,19.0,OPTS,0.0))
     def test_no_preheat_when_all_rooms_warm(self):
         item=d()
         app.add_room(item,"Salon",22.5,21.5,False)
-        self.assertEqual(app.weather_adjustment(-5.0,item,1.0),0.0)
+        # La formule actuelle applique aussi la météo sans demande active.
+        self.assertGreater(app.weather_adjustment(-5.0, 8.0, item, 1.0)[1], 0.0)
     def test_no_preheat_without_forecast(self):
         item=d()
         app.add_room(item,"Salon",21.5,21.5,False)
-        self.assertEqual(app.weather_adjustment(None,item,1.0),0.0)
+        self.assertEqual(app.weather_adjustment(None, 8.0, item, 1.0)[1], 0.0)
 
 if __name__=="__main__":
     unittest.main()
@@ -98,14 +102,16 @@ class WarmingTests(unittest.TestCase):
     def test_warming_reduces_virtual_setpoint(self):
         item=d()
         app.add_room(item,"Salon",21.2,21.5,True)
-        correction=app.weather_adjustment(4.5,item,1.0)
+        correction=app.weather_adjustment(4.5, 8.0, item, 1.0)[1]
         self.assertEqual(correction,-1.0)
         self.assertLess(app.decide(item,19.5,OPTS,correction),app.decide(item,19.5,OPTS,0.0))
     def test_no_reduction_when_room_is_cold(self):
         item=d()
         app.add_room(item,"Salon",20.0,21.5,True)
-        self.assertEqual(app.weather_adjustment(5.0,item,1.0),0.0)
+        item.actual_max_gap = 1.5
+        # V0.3.4 protège progressivement le confort, sans annuler à 100 %.
+        self.assertEqual(app.weather_adjustment(5.0, 8.0, item, 1.0)[1], -0.5)
     def test_small_change_ignored(self):
         item=d()
         app.add_room(item,"Salon",21.5,21.5,False)
-        self.assertEqual(app.weather_adjustment(1.5,item,1.0),0.0)
+        self.assertAlmostEqual(app.weather_adjustment(1.5, 8.0, item, 1.0)[1], -0.21)
