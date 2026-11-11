@@ -1,5 +1,5 @@
 name: "Régulation intelligente - Circuit C"
-version: "0.3.4"
+version: "0.3.5"
 slug: "chauffage_c_regulateur"
 description: "Régulation indépendante du circuit C à partir des thermostats Danfoss et Eve"
 url: "https://github.com/ericdroguet/ha-addon-diematic-to-mqtt"
@@ -30,6 +30,8 @@ options:
   stability_filter_minutes: 5
   stability_confirm_minutes: 10
   stability_emergency_gap: 1.2
+  # Ne pas activer avant validation des diagnostics comparatifs
+  comfort_guard_enabled: false
 schema:
   automatic_control: bool
   dry_run: bool
@@ -49,3 +51,4 @@ schema:
   stability_filter_minutes: "int(1,15)"
   stability_confirm_minutes: "int(2,30)"
   stability_emergency_gap: "float(0.7,3.0)"
+  comfort_guard_enabled: bool
