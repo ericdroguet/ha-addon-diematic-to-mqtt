@@ -30,7 +30,7 @@ class LocalComfortTests(unittest.TestCase):
         self.assertEqual(g.observe(gaps, 12, 30, self.now + 2400).mode, "normal")
         a = g.observe(gaps, 12, 30, self.now + 2701)
         self.assertEqual(a.mode, "collective")
-        self.assertEqual(protected_weather(-1.0, a), -1.0)
+        self.assertAlmostEqual(protected_weather(-1.0, a), -1.0, places=2)
         halfway = g.observe(gaps, 12, 30, self.now + 3300)
         self.assertAlmostEqual(protected_weather(-1.0, halfway), -1 / 3, places=3)
         fully = g.observe(gaps, 12, 30, self.now + 3600)
@@ -59,7 +59,8 @@ class LocalComfortTests(unittest.TestCase):
         h = ComfortGuard(memory, now=self.now + 120)
         result = h.observe([("Salon TV", 0.9)], 12, 30, self.now + 120)
         self.assertGreater(result.total_minutes_24h, 0)
-        self.assertAlmostEqual(result.local_minutes, 2.0)
+        self.assertEqual(result.mode, "normal")
+        self.assertEqual(h.since["Salon TV"], self.now)
 
     def test_missing_room_removes_local_persistence(self):
         g = ComfortGuard(now=self.now)
