@@ -42,7 +42,7 @@ class LocalComfortTests(unittest.TestCase):
         many = [("Salon TV", 0.9), ("Séjour", 0.6)]
         g.observe(many, 12, 30, self.now)
         self.assertEqual(g.observe(many, 12, 30, self.now + 3000).mode, "collective")
-        single = g.observe([("Salon TV", 0.9), ("Séjour", 0.2)], 12, 30, self.now + 3010)
+        single = g.observe([("Salon TV", 0.9), ("Séjour", 0.2)], 12, 30, self.now + 3700)
         self.assertEqual(single.mode, "local")
         self.assertIsNone(g.collective_since)
 
