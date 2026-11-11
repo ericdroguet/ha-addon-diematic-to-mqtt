@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 from urllib import request, error
 from fuel_monitor import FuelMonitor
 from stability import Stabilizer
+from comfort_guard import ComfortGuard, WeatherHysteresis, protected_weather
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 LOG = logging.getLogger("chauffage_c")
@@ -134,6 +135,8 @@ def read_options():
     opts["stability_filter_minutes"] = max(1, min(15, int(opts.get("stability_filter_minutes", 5))))
     opts["stability_confirm_minutes"] = max(2, min(30, int(opts.get("stability_confirm_minutes", 10))))
     opts["stability_emergency_gap"] = max(0.7, min(3.0, float(opts.get("stability_emergency_gap", 1.2))))
+    # V0.3.5: mode comparatif par défaut. Aucun changement du pilotage existant.
+    opts["comfort_guard_enabled"] = bool(opts.get("comfort_guard_enabled", False))
     return opts
 
 
@@ -145,6 +148,7 @@ class Demand:
     priority: str = "Aucune"
     near_count: int = 0
     gaps: list = field(default_factory=list)
+    actual_gaps: list = field(default_factory=list)
     preheat_rooms: list = field(default_factory=list)
     setback_rooms: list = field(default_factory=list)
     next_comfort_minutes: float | None = None
@@ -273,6 +277,7 @@ def collect(opts=None):
         if current is None or target is None:
             continue
         result.actual_max_gap = max(result.actual_max_gap, target - current)
+        result.actual_gaps.append((attrs.get("friendly_name", room), max(0.0, target - current)))
         heating = attrs.get("hvac_action") == "heating"
         if result.schedule_enabled and record.get("state") == "auto" and attrs.get("room_state") == "Normal":
             target, fade_heating = adjust_for_schedule(attrs, current, target, now, opts, result)
@@ -286,9 +291,12 @@ def collect(opts=None):
         valves = [state(e) for e in EVE_VALVES]
         opening = any(v and val(v.get("state")) is not None
                       and val(v["state"]) > 5 for v in valves)
+        eve_current = val(thermometer.get("state"))
+        eve_target = val(eve.get("attributes", {}).get("temperature"))
+        if eve_current is not None and eve_target is not None:
+            result.actual_gaps.append(("Chambre Eve", max(0.0, eve_target - eve_current)))
         add_room(
-            result, "Chambre Eve", val(thermometer.get("state")),
-            val(eve.get("attributes", {}).get("temperature")), opening,
+            result, "Chambre Eve", eve_current, eve_target, opening,
         )
     return result
 
@@ -392,10 +400,16 @@ class Controller:
         self.last_save = 0
         self.last_discovery = 0
         self.stabilizer = Stabilizer(mqtt_publish)
+        self.comfort_guard = ComfortGuard()
+        self.weather_hysteresis = WeatherHysteresis()
+        self.last_comfort_publish = 0
+        self.last_comfort_discovery = 0
         try:
             with open("/data/thermal_state.json", encoding="utf-8") as f:
-                self.deficits = {str(k): min(7200.0, max(0.0, float(v)))
-                                 for k, v in json.load(f).get("deficits", {}).items()}
+                saved = json.load(f)
+            self.deficits = {str(k): min(7200.0, max(0.0, float(v)))
+                             for k, v in saved.get("deficits", {}).items()}
+            self.comfort_guard = ComfortGuard(saved.get("comfort_guard", {}))
         except (OSError, ValueError, TypeError):
             pass
 
@@ -403,7 +417,7 @@ class Controller:
         path = "/data/thermal_state.json"
         temp = path + ".tmp"
         with open(temp, "w", encoding="utf-8") as f:
-            json.dump({"deficits": self.deficits}, f)
+            json.dump({"deficits": self.deficits, "comfort_guard": self.comfort_guard.snapshot()}, f)
         os.replace(temp, path)
 
     def publish_weather_metrics(self, calculated, retained, real_effect):
@@ -446,6 +460,60 @@ class Controller:
         except Exception as exc:
             LOG.warning("Télémétrie MQTT indisponible: %s", exc)
 
+    def publish_comfort_metrics(self, assessment, old_weather, new_weather, old_target, new_target, active):
+        """Sondes MQTT consultatives et détails par pièce, rafraîchis toutes les 5 min."""
+        try:
+            now = time.monotonic()
+            if self.last_comfort_publish and now - self.last_comfort_publish < 300:
+                return
+            topic = "chauffage_c/diagnostics/comfort"
+            if not self.last_comfort_discovery or now - self.last_comfort_discovery >= 3600:
+                device = {
+                    "identifiers": ["chauffage_c_regulateur"],
+                    "name": "Régulation intelligente - Circuit C",
+                    "manufacturer": "Régulation locale", "model": "Circuit C",
+                }
+                for key, name, value_topic, state_class, unit in (
+                    ("mode_confort", "Diagnostic déficit circuit C", topic + "/mode", None, None),
+                    ("deficit_pieces_24h", "Déficit par pièce sur 24 h", topic + "/minutes", "measurement", "min"),
+                    ("ecart_simulation_v035", "V0.3.5 Ecart simulation consigne", topic + "/difference", "measurement", "°C"),
+                ):
+                    config = {
+                        "name": name, "object_id": f"chauffage_c_{key}",
+                        "default_entity_id": f"sensor.chauffage_c_{key}",
+                        "unique_id": f"chauffage_c_{key}",
+                        "state_topic": value_topic, "device": device,
+                        "entity_category": "diagnostic",
+                    }
+                    if state_class:
+                        config["state_class"] = state_class
+                    if unit:
+                        config["unit_of_measurement"] = unit
+                    if key == "deficit_pieces_24h":
+                        config["json_attributes_topic"] = topic + "/details"
+                    mqtt_publish(f"homeassistant/sensor/chauffage_c_{key}/config",
+                                 json.dumps(config, ensure_ascii=False), True)
+                self.last_comfort_discovery = now
+            attrs = {
+                "rooms": assessment.rooms,
+                "local_room": assessment.local_room or "",
+                "local_minutes": round(assessment.local_minutes, 1),
+                "collective_minutes": round(assessment.collective_minutes, 1),
+                "cold_rooms": assessment.cold_rooms,
+                "weather_previous": round(old_weather, 3),
+                "weather_v035": round(new_weather, 3),
+                "target_previous": old_target,
+                "target_v035": new_target,
+                "new_control_active": active,
+            }
+            mqtt_publish(topic + "/mode", assessment.mode)
+            mqtt_publish(topic + "/minutes", str(round(assessment.total_minutes_24h)))
+            mqtt_publish(topic + "/difference", f"{new_target - old_target:+.2f}")
+            mqtt_publish(topic + "/details", json.dumps(attrs, ensure_ascii=False))
+            self.last_comfort_publish = now
+        except Exception as exc:
+            LOG.warning("Télémétrie confort V0.3.5 indisponible: %s", exc)
+
     def restore(self):
         if not self.touched:
             return
@@ -463,6 +531,9 @@ class Controller:
         elapsed = max(0.0, min(120.0, now_cycle - self.last_cycle))
         self.last_cycle = now_cycle
         persistence = persistent_index(demand, self.deficits, elapsed)
+        assessment = self.comfort_guard.observe(
+            demand.actual_gaps, demand.valid, elapsed, now=time.time()
+        )
         if now_cycle - self.last_save > 600:
             try:
                 self.save_memory()
@@ -509,8 +580,31 @@ class Controller:
         else:
             calculated, protection = None, 1.0
         baseline = decide(demand, previous, live_opts, 0.0, persistence)
-        proposed = decide(demand, previous, live_opts, anticipation, persistence)
-        effect = round(proposed - baseline, 3)
+        legacy_proposed = decide(demand, previous, live_opts, anticipation, persistence)
+        # Chemin candidat V0.3.5 : calculé et publié, mais NON envoyé
+        # à la Diematic tant que comfort_guard_enabled reste à false.
+        steady_weather = self.weather_hysteresis.apply(anticipation, time.time())
+        candidate_weather = protected_weather(steady_weather, assessment)
+        candidate_demand = demand
+        candidate_persistence = persistence
+        if assessment.mode == "local" and assessment.local_room:
+            # Limiter l'influence supplémentaire d'une seule pièce durablement froide.
+            # La demande de chauffage de cette pièce reste comptabilisée.
+            candidate_demand = Demand(**{
+                **vars(demand),
+                "gaps": [
+                    (name, min(gap, 0.5) if name == assessment.local_room else gap)
+                    for name, gap in demand.gaps
+                ],
+            })
+            candidate_persistence = min(persistence, 0.5)
+        candidate_proposed = decide(candidate_demand, previous, live_opts,
+                                    candidate_weather, candidate_persistence)
+        guard_active = opts.get("comfort_guard_enabled", False)
+        proposed = candidate_proposed if guard_active else legacy_proposed
+        self.publish_comfort_metrics(assessment, anticipation, candidate_weather,
+                                     legacy_proposed, candidate_proposed, guard_active)
+        effect = round(legacy_proposed - baseline, 3)
         self.publish_weather_metrics(calculated, anticipation if calculated is not None else None,
                                      effect if calculated is not None else None)
         if opts["weather_anticipation"]:
@@ -518,7 +612,15 @@ class Controller:
                      self.cached_change, demand.near_count,
                      f"{calculated:+.2f}" if calculated is not None else "indisponible",
                      anticipation, protection, effect, live_opts["room_influence"], live_limit,
-                     baseline, proposed)
+                     baseline, legacy_proposed)
+        LOG.info("V0.3.5 comparaison: mode=%s local=%s déficit_local=%.0f min; "
+                 "froides=%d collectif=%.0f min; météo_ancienne=%+.2f °C "
+                 "météo_candidate=%+.2f °C; consigne_ancienne=%.1f "
+                 "candidate=%.1f; nouveau_pilotage=%s",
+                 assessment.mode, assessment.local_room or "-", assessment.local_minutes,
+                 assessment.cold_rooms, assessment.collective_minutes, anticipation,
+                 candidate_weather, legacy_proposed, candidate_proposed,
+                 "ACTIF" if guard_active else "SIMULATION")
         LOG.info("zones_valides=%d demandes=%d ecart_max=%.2f priorite=%s départ=%.1f extérieur=%.1f"
                  " consigne_actuelle=%.1f consigne_proposée=%.1f pilotage=%s",
                  demand.valid, demand.count, demand.max_gap, demand.priority,
@@ -564,7 +666,7 @@ class Controller:
 def main():
     opts = read_options()
     LOG.info("Régulation C %s; démarrage en %s",
-             "V0.3.4", "SIMULATION" if opts.get("dry_run", True) or not opts.get("automatic_control") else "ACTIF")
+             "V0.3.5", "SIMULATION" if opts.get("dry_run", True) or not opts.get("automatic_control") else "ACTIF")
     controller = Controller(opts)
     fioul = FuelMonitor(api, state, mqtt_publish)
     try:
