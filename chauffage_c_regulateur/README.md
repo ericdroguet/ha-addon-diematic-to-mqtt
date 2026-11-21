@@ -53,3 +53,39 @@ Il ne s'agit pas encore d'un modèle prédictif : le calcul réagit à la demand
 - Refroidissement : correction positive si pièce en demande ou proche de sa consigne.
 - Réchauffement : correction négative, sauf si une pièce manque de plus de 0,5 °C.
 - Journaux : variation prévue, correction signée, consigne sans et avec météo.
+
+
+## V0.4.0 — surveillance hydraulique sans action sur le chauffage
+
+Deux DS18B20 reliées au Shelly Plus Uni mesurent le circuit C :
+- **101, départ** : \`sensor.shellyplusuni_c88a7beb1558_temperature_2\`
+- **100, retour** : \`sensor.shellyplusuni_c88a7beb1558_temperature\`
+
+L'observateur \`thermal_monitor.py\` fonctionne dans un fil séparé du régulateur, et ne fait
+que lire les entités HA et publier des mesures MQTT. Il ne pilote **ni la chaudière, ni la
+vanne mélangeuse, ni les consignes virtuelles**. La logique de contrôle v0.3.4 reste inchangée.
+
+Entités découvertes automatiquement :
+- \`sensor.chauffage_c_thermique_delta_t\` : départ moins retour, **signé** ;
+- \`sensor.chauffage_c_thermique_delta_t_5min\`, \`_15min\`, \`_30min\` :
+  médianes glissantes après couverture suffisante de leur fenêtre ;
+- \`sensor.chauffage_c_thermique_ecart_depart_diematic\` : écart Shelly 101 - sonde Diematic ;
+- \`sensor.chauffage_c_thermique_etat\` : état de validité.
+
+Les températures doivent être numériques, plausibles et récentes (< 10 minutes).
+Si une sonde est indisponible, trop ancienne ou si le ΔT signé est incohérent, les valeurs
+thermiques passent indisponibles : on ne confond plus une panne de sonde avec 0 °C.
+Les filtres redémarrent après une panne ; ils ne mélangent pas l'avant et l'après.
+
+Les publications MQTT sont non retenues pour les mesures et expirent sous 180 secondes ;
+le seul état conservé par MQTT est la disponibilité courante de l'observateur.
+Le capteur historique \`sensor.circuit_c_delta_t_depart_retour\` (Min/Max) est conservé
+pour compatibilité avec les anciennes cartes, mais ne doit **pas** servir au futur pilotage.
+
+**Précaution** : les lectures du retour peuvent refléter le temps de réponse de la sonde
+et du tuyau, et le ΔT ne suffit pas à mesurer la puissance sans débitmètre. Pas de
+correction directe des consignes en v0.4.0 ; prochaines étapes : observation,
+comparaison au confort, simulation, puis validation avant tout pilotage basé sur le ΔT.
+
+**Retour arrière** : réinstaller la v0.3.4. Les consignes jour/nuit, les réglages, les
+horaires et l'application Modbus indépendante n'ont pas changé.

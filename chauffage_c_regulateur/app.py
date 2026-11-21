@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import signal
+import threading
 import sys
 import time
 from dataclasses import dataclass, field
@@ -11,6 +12,7 @@ from zoneinfo import ZoneInfo
 from urllib import request, error
 from fuel_monitor import FuelMonitor
 from stability import Stabilizer
+from thermal_monitor import ThermalMonitor
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 LOG = logging.getLogger("chauffage_c")
@@ -561,12 +563,25 @@ class Controller:
         LOG.warning("Consigne Diematic jour/nuit -> %.1f °C (filtrage 5 min / confirmation 10 min)", target)
 
 
+def monitor_thermal_loop():
+    """Read-only Shelly telemetry in a daemon thread: never block the regulator."""
+    observer = ThermalMonitor(state, mqtt_publish)
+    LOG.info("Surveillance hydraulique C active : mesure seulement, sans commandes")
+    while not STOP:
+        observer.cycle()
+        for _ in range(60):
+            if STOP:
+                break
+            time.sleep(1)
+
+
 def main():
     opts = read_options()
     LOG.info("Régulation C %s; démarrage en %s",
-             "V0.3.4", "SIMULATION" if opts.get("dry_run", True) or not opts.get("automatic_control") else "ACTIF")
+             "V0.4.0", "SIMULATION" if opts.get("dry_run", True) or not opts.get("automatic_control") else "ACTIF")
     controller = Controller(opts)
     fioul = FuelMonitor(api, state, mqtt_publish)
+    threading.Thread(target=monitor_thermal_loop, name="circuit-c-thermal", daemon=True).start()
     try:
         while not STOP:
             fioul.cycle()
