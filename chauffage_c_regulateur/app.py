@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 from urllib import request, error
 from fuel_monitor import FuelMonitor
 from stability import Stabilizer
-from thermal_monitor import ThermalMonitor
+from thermal_monitor import ThermalMonitor, _temperature, DEPARTURE, RETURN
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 LOG = logging.getLogger("chauffage_c")
@@ -380,6 +380,62 @@ def decide(demand, previous, opts, anticipation=0.0, persistence=0.0):
     return round_half(min(opts["maximum_virtual"], max(opts["minimum_virtual"], stepped)))
 
 
+def thermal_candidate(demand, delta, departure, discrepancy, persistence):
+    if any(x is None for x in (delta, departure, discrepancy)) or not (0 <= delta <= 20 and 35 <= departure <= 60 and abs(discrepancy) <= 3):
+        return None
+    if demand.preheat_rooms or demand.setback_rooms:
+        return 0.0
+    if demand.actual_max_gap >= 0.7 and demand.count >= 3 and delta >= 5 and persistence >= 0.25:
+        return 0.5
+    if demand.actual_max_gap <= 0.15 and demand.count <= 1 and delta <= 2:
+        return -0.5
+    return 0.0
+
+
+class ThermalCorrection:
+    def __init__(self):
+        self.pending = None
+        self.since = None
+        self.value = 0.0
+
+    def step(self, now, candidate):
+        if candidate is None or candidate == 0:
+            self.pending = self.since = None
+            self.value = 0.0
+            return self.value
+        if candidate != self.pending:
+            self.pending, self.since = candidate, now
+            self.value = 0.0
+        if now - self.since >= 1800:
+            self.value = candidate
+        return self.value
+
+
+def thermal_input(demand, persistence):
+    # Observer publishes once per minute; reject stale diagnostics.
+    now = time.time()
+    def fresh(entity):
+        record = state(entity)
+        if not record:
+            return None
+        try:
+            stamp = datetime.fromisoformat((record.get("last_reported") or record["last_updated"]).replace("Z", "+00:00"))
+            if not -30 <= now - stamp.timestamp() <= 180:
+                return None
+            return record.get("state")
+        except (ValueError, TypeError, KeyError, OverflowError):
+            return None
+    if fresh("sensor.chauffage_c_thermique_etat") != "ok":
+        return None
+    delta = val(fresh("sensor.chauffage_c_thermique_delta_t_30min"))
+    discrepancy = val(fresh("sensor.chauffage_c_thermique_ecart_depart_diematic"))
+    departure, error = _temperature(state(DEPARTURE), now)
+    returned, return_error = _temperature(state(RETURN), now)
+    if error or return_error or not 0 <= departure - returned <= 20:
+        return None
+    return thermal_candidate(demand, delta, departure, discrepancy, persistence)
+
+
 class Controller:
     def __init__(self, opts):
         self.opts = opts
@@ -394,6 +450,7 @@ class Controller:
         self.last_save = 0
         self.last_discovery = 0
         self.stabilizer = Stabilizer(mqtt_publish)
+        self.thermal = ThermalCorrection()
         try:
             with open("/data/thermal_state.json", encoding="utf-8") as f:
                 self.deficits = {str(k): min(7200.0, max(0.0, float(v)))
@@ -481,6 +538,7 @@ class Controller:
         safe = (demand.valid >= 8 and good_numbers and mode is not None
                 and mode.get("state") == "AUTO" and val(departure["state"]) <= 60)
         if not safe:
+            self.thermal.step(now_cycle, None)
             self.stabilizer.reset_pending(reset_filter=True)
             self.stabilizer.status = "pause sécurité"
             self.stabilizer.publish()
@@ -513,6 +571,16 @@ class Controller:
         baseline = decide(demand, previous, live_opts, 0.0, persistence)
         proposed = decide(demand, previous, live_opts, anticipation, persistence)
         effect = round(proposed - baseline, 3)
+        try:
+            candidate = thermal_input(demand, persistence) if opts.get('thermal_correction', True) else None
+        except Exception as exc:
+            LOG.warning('Correction thermique indisponible: %s', exc)
+            candidate = None
+        correction = self.thermal.step(now_cycle, candidate)
+        before_thermal = proposed
+        proposed = round_half(min(opts['maximum_virtual'], current + opts['max_rise_per_write'],
+                                  max(opts['minimum_virtual'], current - opts['max_drop_per_write'], proposed + correction)))
+        LOG.info('Thermique: candidat=%s correction=%+.1f effet=%+.1f', candidate, correction, proposed - before_thermal)
         self.publish_weather_metrics(calculated, anticipation if calculated is not None else None,
                                      effect if calculated is not None else None)
         if opts["weather_anticipation"]:
@@ -578,7 +646,7 @@ def monitor_thermal_loop():
 def main():
     opts = read_options()
     LOG.info("Régulation C %s; démarrage en %s",
-             "V0.4.0", "SIMULATION" if opts.get("dry_run", True) or not opts.get("automatic_control") else "ACTIF")
+             "V0.4.1", "SIMULATION" if opts.get("dry_run", True) or not opts.get("automatic_control") else "ACTIF")
     controller = Controller(opts)
     fioul = FuelMonitor(api, state, mqtt_publish)
     threading.Thread(target=monitor_thermal_loop, name="circuit-c-thermal", daemon=True).start()
