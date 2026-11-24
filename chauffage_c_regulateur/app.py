@@ -440,7 +440,13 @@ def thermal_input(observer, demand, persistence):
         LOG.info("Thermique rejet: transitoire Diematic; cible=%.2f écart réel-cible=%+.2f", target, tracking)
         return None
     LOG.info("Suivi Diematic: cible=%.2f écart réel-cible=%+.2f", target, tracking)
+    if values.get("stable_seconds", 0) < 300:
+        LOG.info("Thermique rejet: stabilité hydraulique moins de 5 min")
+        return None
     candidate = thermal_candidate(demand, delta, departure, discrepancy, persistence)
+    if candidate == -0.5 and (values.get("inversion_30min") is None or values["inversion_30min"] > 10):
+        LOG.info("Thermique rejet: inversions récentes, réduction non fiable")
+        return None
     if candidate is None:
         LOG.info("Thermique rejet: limites physiques; delta30=%.2f départ=%.2f écart=%.2f", delta, departure, discrepancy)
     else:
