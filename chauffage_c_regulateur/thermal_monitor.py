@@ -69,6 +69,7 @@ class ThermalMonitor:
         self.last_status = None
         self.status = "demarrage"
         self.current = {}
+        self.snapshot = None  # atomic replacement; never mutate published values
 
     def _discover(self, now):
         if self.last_discovery and now - self.last_discovery < DISCOVERY_INTERVAL:
@@ -120,6 +121,8 @@ class ThermalMonitor:
         try:
             self._cycle()
         except Exception as exc:
+            self.snapshot = None
+            self.samples.clear()
             LOG.warning("Surveillance thermique indisponible (régulation inchangée): %s", exc)
 
     def _cycle(self):
@@ -148,6 +151,7 @@ class ThermalMonitor:
             self.samples.clear()
         self.status = status
         self.current = values
+        self.snapshot = (time.monotonic(), status, departure, returned, dict(values))
         due = not self.last_publish or now - self.last_publish >= PUBLISH_INTERVAL
         if status != self.last_status or due:
             self._discover(now)
