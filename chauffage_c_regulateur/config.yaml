@@ -1,5 +1,5 @@
 name: "Régulation intelligente - Circuit C"
-version: "0.4.0"
+version: "0.4.1"
 slug: "chauffage_c_regulateur"
 description: "Régulation indépendante du circuit C à partir des thermostats Danfoss et Eve"
 url: "https://github.com/ericdroguet/ha-addon-diematic-to-mqtt"
@@ -12,6 +12,7 @@ init: false
 homeassistant_api: true
 hassio_api: true
 options:
+  thermal_correction: true
   automatic_control: false
   dry_run: true
   manual_day: 21.0
@@ -31,6 +32,7 @@ options:
   stability_confirm_minutes: 10
   stability_emergency_gap: 1.2
 schema:
+  thermal_correction: bool
   automatic_control: bool
   dry_run: bool
   manual_day: "float(6,30)"
