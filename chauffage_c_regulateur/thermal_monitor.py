@@ -16,6 +16,7 @@ LOG = logging.getLogger("chauffage_c.thermal")
 DEPARTURE = "sensor.shellyplusuni_c88a7beb1558_temperature_2"  # DS18B20 101
 RETURN = "sensor.shellyplusuni_c88a7beb1558_temperature"  # DS18B20 100
 DIEMATIC = "sensor.zone_c_departure_temp"
+TARGET = "sensor.zone_c_target_temp"
 BASE_TOPIC = "chauffage_c/thermique"
 DISCOVERY_INTERVAL = 3600
 PUBLISH_INTERVAL = 60
@@ -23,6 +24,8 @@ MAX_AGE_SECONDS = 600
 MAX_WINDOW_SECONDS = 1800
 
 NUMERIC = {
+    "cible_diematic": ("Température cible départ Diematic", "°C"),
+    "ecart_cible_diematic": ("Écart départ réel - cible Diematic", "°C"),
     "delta_t": ("Delta T signé départ-retour", "°C"),
     "delta_t_5min": ("Delta T médian 5 min", "°C"),
     "delta_t_15min": ("Delta T médian 15 min", "°C"),
@@ -130,6 +133,7 @@ class ThermalMonitor:
         departure, d_error = _temperature(self.read_state(DEPARTURE), now)
         returned, r_error = _temperature(self.read_state(RETURN), now)
         diematic, _ = _temperature(self.read_state(DIEMATIC), now)
+        target, _ = _temperature(self.read_state(TARGET), now)
         status = d_error or r_error or "ok"
         values = {}
         if status == "ok":
@@ -149,6 +153,10 @@ class ThermalMonitor:
                     values["ecart_depart_diematic"] = round(departure - diematic, 2)
         if status != "ok":
             self.samples.clear()
+        if target is not None:
+            values["cible_diematic"] = target
+            if diematic is not None:
+                values["ecart_cible_diematic"] = round(diematic - target, 2)
         self.status = status
         self.current = values
         self.snapshot = (time.monotonic(), status, departure, returned, dict(values))
@@ -164,7 +172,8 @@ class ThermalMonitor:
                 for minutes in (5, 15, 30):
                     if f"delta_t_{minutes}min" not in values:
                         self.publish(f"{BASE_TOPIC}/delta_t_{minutes}min", "unknown", False)
-                if "ecart_depart_diematic" not in values:
-                    self.publish(f"{BASE_TOPIC}/ecart_depart_diematic", "unknown", False)
+                for key in ("ecart_depart_diematic", "cible_diematic", "ecart_cible_diematic"):
+                    if key not in values:
+                        self.publish(f"{BASE_TOPIC}/{key}", "unknown", False)
             self.last_publish = now
         self.last_status = status
