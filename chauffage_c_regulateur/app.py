@@ -431,6 +431,15 @@ def thermal_input(observer, demand, persistence):
     if not 0 <= departure - returned <= 20:
         LOG.info("Thermique rejet: delta instantané hors limites")
         return None
+    tracking = values.get("ecart_cible_diematic")
+    target = values.get("cible_diematic")
+    if tracking is None or target is None:
+        LOG.info("Thermique rejet: cible Diematic indisponible")
+        return None
+    if abs(tracking) > 3.0:
+        LOG.info("Thermique rejet: transitoire Diematic; cible=%.2f écart réel-cible=%+.2f", target, tracking)
+        return None
+    LOG.info("Suivi Diematic: cible=%.2f écart réel-cible=%+.2f", target, tracking)
     candidate = thermal_candidate(demand, delta, departure, discrepancy, persistence)
     if candidate is None:
         LOG.info("Thermique rejet: limites physiques; delta30=%.2f départ=%.2f écart=%.2f", delta, departure, discrepancy)
