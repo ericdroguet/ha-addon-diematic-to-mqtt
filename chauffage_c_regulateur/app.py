@@ -264,7 +264,7 @@ def collect(opts=None):
         house_state = state(HOUSE_STATE)
         result.schedule_enabled = bool(
             house_mode and house_mode.get("state") == "schedule"
-            and house_state and house_state.get("state") == "at_home"
+            and house_state and house_state.get("state") in ("at_home", "asleep")
         )
     now = datetime.now(LOCAL_TZ)
     for room in ROOMS:
@@ -758,7 +758,7 @@ class Controller:
             if not os.path.exists(path) or os.path.getsize(path) < 4 * 1024 * 1024:
                 with open(path, "a", encoding="utf-8") as trace:
                     trace.write(json.dumps({
-                        "ts": time.time(), "version": "0.4.8",
+                        "ts": time.time(), "version": "0.4.9",
                         "status": snap[1] if snap else None,
                         "departure": snap[2] if snap else None,
                         "return": snap[3] if snap else None,
@@ -837,7 +837,7 @@ def monitor_thermal_loop(observer):
 def main():
     opts = read_options()
     LOG.info("Régulation C %s; démarrage en %s",
-             "V0.4.8", "SIMULATION" if opts.get("dry_run", True) or not opts.get("automatic_control") else "ACTIF")
+             "V0.4.9", "SIMULATION" if opts.get("dry_run", True) or not opts.get("automatic_control") else "ACTIF")
     observer = ThermalMonitor(state, mqtt_publish)
     controller = Controller(opts, observer)
     fioul = FuelMonitor(api, state, mqtt_publish)
