@@ -232,6 +232,6 @@ class ThermalMonitor:
                     self.publish(f"{BASE_TOPIC}/{key}", f"{value:.2f}", False)
                 for key in NUMERIC:
                     if key not in values:
-                        self.publish(f"{BASE_TOPIC}/{key}", "unknown", False)
+                        self.publish(f"{BASE_TOPIC}/{key}", "None", False)
             self.last_publish = now
         self.last_status = status
