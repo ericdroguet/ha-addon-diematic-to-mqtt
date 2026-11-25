@@ -406,7 +406,7 @@ class ThermalCorrection:
         if candidate != self.pending:
             self.pending, self.since = candidate, now
             self.value = 0.0
-        if now - self.since >= 1800:
+        if now - self.since >= 900:
             self.value = candidate
         return self.value
 
@@ -429,9 +429,10 @@ def thermal_input(observer, demand, persistence, diagnostic=None):
         return reject("sonde")
     delta = values.get("delta_t_30min")
     discrepancy = values.get("ecart_depart_diematic")
-    if delta is None or discrepancy is None:
-        LOG.info("Thermique rejet: historique 30 min ou comparaison Diematic indisponible")
-        return reject("historique_ou_diematic")
+    if delta is None:
+        return reject("couverture_insuffisante")
+    if discrepancy is None:
+        return reject("diematic_indisponible")
     if not 0 <= departure - returned <= 20:
         LOG.info("Thermique rejet: delta instantané hors limites")
         return reject("delta_instantane")
@@ -447,6 +448,8 @@ def thermal_input(observer, demand, persistence, diagnostic=None):
     if values.get("stable_seconds", 0) < 300:
         LOG.info("Thermique rejet: stabilité hydraulique moins de 5 min")
         return reject("stabilite")
+    if values.get("confiance", 0) < 60:
+        return reject("confiance")
     candidate = thermal_candidate(demand, delta, departure, discrepancy, persistence)
     if candidate == -0.5 and (values.get("inversion_30min") is None or values["inversion_30min"] > 10):
         LOG.info("Thermique rejet: inversions récentes, réduction non fiable")
@@ -490,6 +493,8 @@ class ThermalStats:
                 b[k] = b.get(k, 0) + n
             add("cycles")
             add("valid" if candidate is not None else "reject_" + reason)
+            if candidate is not None:
+                add("candidate_positive" if candidate > 0 else "candidate_negative" if candidate < 0 else "candidate_neutral")
             if control and correction and self.previous is not None and correction != self.previous[1]:
                 add("positive" if correction > 0 else "negative")
             if self.previous is not None:
@@ -522,6 +527,9 @@ class ThermalStats:
                    "positive": ("Activations positives", None), "negative": ("Activations négatives", None),
                    "active_min": ("Correction active", "min"), "effect_min": ("Effet sur proposition", "min"),
                    "inverse_min": ("Inversions observées", "min"), "observed_h": ("Durée observée", "h"),
+                   "candidate_positive": ("Candidats positifs", None),
+                   "candidate_negative": ("Candidats négatifs", None),
+                   "candidate_neutral": ("Candidats neutres", None),
                    "rejects": ("Motifs de rejet", None)}
         discover = now - self.last_discovery >= 3600
         for hours in (24, 168):
@@ -532,7 +540,9 @@ class ThermalStats:
                         totals[name] = totals.get(name, 0) + n
             cycles = totals.get("cycles", 0)
             reasons = {k[7:]: v for k, v in totals.items() if k.startswith("reject_")}
-            values = dict(totals, valid_pct=round(100 * totals.get("valid", 0) / cycles, 1) if cycles else "None",
+            values = dict(totals, candidate_positive=totals.get("candidate_positive", 0),
+                          candidate_negative=totals.get("candidate_negative", 0),
+                          candidate_neutral=totals.get("candidate_neutral", 0), valid_pct=round(100 * totals.get("valid", 0) / cycles, 1) if cycles else "None",
                           active_min=round(totals.get("active_s", 0)/60, 1),
                           effect_min=round(totals.get("effect_s", 0)/60, 1),
                           inverse_min=round(totals.get("inverse_s", 0)/60, 1),
@@ -707,6 +717,30 @@ class Controller:
             proposed = decide(demand, previous, live_opts, anticipation + correction, persistence)
         LOG.info('Thermique: candidat=%s correction=%+.1f effet=%+.1f', candidate, correction, proposed - before_thermal)
         self.stats.observe(diagnostic['reason'], candidate, correction, proposed - before_thermal, self.observer.snapshot, control)
+        # Diagnostic only: bounded local trace for retrospective analysis.
+        try:
+            snap = self.observer.snapshot
+            day_index = int(time.time() // 86400)
+            path = "/data/thermal_trace_%d.jsonl" % (day_index % 7)
+            if os.path.exists(path) and int(os.stat(path).st_mtime // 86400) != day_index:
+                os.remove(path)
+            if not os.path.exists(path) or os.path.getsize(path) < 4 * 1024 * 1024:
+                with open(path, "a", encoding="utf-8") as trace:
+                    trace.write(json.dumps({
+                        "ts": time.time(), "version": "0.4.7",
+                        "status": snap[1] if snap else None,
+                        "departure": snap[2] if snap else None,
+                        "return": snap[3] if snap else None,
+                        "thermal": snap[4] if snap else {},
+                        "snapshot_age": time.monotonic() - snap[0] if snap else None,
+                        "actual_max_gap": demand.actual_max_gap, "count": demand.count,
+                        "preheat": bool(demand.preheat_rooms), "setback": bool(demand.setback_rooms),
+                        "persistence": persistence, "reason": diagnostic['reason'],
+                        "candidate": candidate, "correction": correction,
+                        "current": current, "before": before_thermal, "proposed": proposed,
+                        "control": control}, separators=(",", ":")) + "\n")
+        except Exception as exc:
+            LOG.warning("Trace thermique indisponible: %s", exc)
         self.publish_weather_metrics(calculated, anticipation if calculated is not None else None,
                                      effect if calculated is not None else None)
         if opts["weather_anticipation"]:
@@ -771,7 +805,7 @@ def monitor_thermal_loop(observer):
 def main():
     opts = read_options()
     LOG.info("Régulation C %s; démarrage en %s",
-             "V0.4.6", "SIMULATION" if opts.get("dry_run", True) or not opts.get("automatic_control") else "ACTIF")
+             "V0.4.7", "SIMULATION" if opts.get("dry_run", True) or not opts.get("automatic_control") else "ACTIF")
     observer = ThermalMonitor(state, mqtt_publish)
     controller = Controller(opts, observer)
     fioul = FuelMonitor(api, state, mqtt_publish)
