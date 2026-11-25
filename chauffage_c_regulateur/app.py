@@ -532,7 +532,7 @@ class ThermalStats:
                         totals[name] = totals.get(name, 0) + n
             cycles = totals.get("cycles", 0)
             reasons = {k[7:]: v for k, v in totals.items() if k.startswith("reject_")}
-            values = dict(totals, valid_pct=round(100 * totals.get("valid", 0) / cycles, 1) if cycles else "unknown",
+            values = dict(totals, valid_pct=round(100 * totals.get("valid", 0) / cycles, 1) if cycles else "None",
                           active_min=round(totals.get("active_s", 0)/60, 1),
                           effect_min=round(totals.get("effect_s", 0)/60, 1),
                           inverse_min=round(totals.get("inverse_s", 0)/60, 1),
@@ -621,7 +621,7 @@ class Controller:
             for (key, _, _), value in zip(METRICS, values):
                 mqtt_publish(
                     f"{METRIC_PREFIX}/diagnostics/{key}",
-                    "unknown" if value is None else f"{value:+.3f}",
+                    "None" if value is None else f"{value:+.3f}",
                     False,
                 )
         except Exception as exc:
@@ -771,7 +771,7 @@ def monitor_thermal_loop(observer):
 def main():
     opts = read_options()
     LOG.info("Régulation C %s; démarrage en %s",
-             "V0.4.5", "SIMULATION" if opts.get("dry_run", True) or not opts.get("automatic_control") else "ACTIF")
+             "V0.4.6", "SIMULATION" if opts.get("dry_run", True) or not opts.get("automatic_control") else "ACTIF")
     observer = ThermalMonitor(state, mqtt_publish)
     controller = Controller(opts, observer)
     fioul = FuelMonitor(api, state, mqtt_publish)
