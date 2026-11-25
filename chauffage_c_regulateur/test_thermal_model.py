@@ -56,5 +56,44 @@ class TestModel(unittest.TestCase):
         self.assertEqual(build(delta=3.7,trend=-1).evaluate(3600,rooms(),0,0)[0],-.5)
 
 
+class TestSchedule(unittest.TestCase):
+    def test_house_modes(self):
+        from unittest.mock import patch
+        import app
+        for mode, house, enabled, expected in (
+            ("schedule", "at_home", True, True),
+            ("schedule", "asleep", True, True),
+            ("schedule", "away", True, False),
+            ("schedule", "vacation", True, False),
+            ("schedule", "pause", True, False),
+            ("schedule", "manual", True, False),
+            ("schedule", "boost", True, False),
+            ("schedule", "unavailable", True, False),
+            ("schedule", None, True, False),
+            ("vacation", "asleep", True, False),
+            ("at_home", "asleep", True, False),
+            ("pause", "asleep", True, False),
+            ("schedule", "asleep", False, False),
+        ):
+            with self.subTest(mode=mode, house=house, enabled=enabled):
+                records = {app.HOUSE_MODE: {"state": mode},
+                           app.HOUSE_STATE: {"state": house} if house is not None else None}
+                with patch.object(app, "state", side_effect=records.get):
+                    self.assertEqual(app.collect({"schedule_anticipation": enabled}).schedule_enabled, expected)
+
+    def test_preheat_living(self):
+        from datetime import datetime
+        import app
+        attrs = {"friendly_name": "Living", "at_home_setpoint": 21.5,
+                 "away_setpoint": 19, "schedule": {"thursday": ["06:00-22:00"]}}
+        opts = {"schedule_preheat_minutes": 120, "schedule_setback_minutes": 45}
+        result = app.Demand()
+        target, fade = app.adjust_for_schedule(attrs, 19, 19,
+                    datetime(2026, 11, 26, 5, 0, tzinfo=app.LOCAL_TZ), opts, result)
+        self.assertAlmostEqual(target, 20.25)
+        self.assertFalse(fade)
+        self.assertEqual(result.preheat_rooms, ["Living"])
+
+
 if __name__ == '__main__':
     unittest.main()
