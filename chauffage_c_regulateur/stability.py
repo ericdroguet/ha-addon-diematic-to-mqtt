@@ -216,7 +216,7 @@ class Stabilizer:
                 self.last_discovery = now
             for key, value in self.metrics().items():
                 self.publish_mqtt(STATS_TOPIC + "/" + key,
-                                  "unknown" if value is None else str(value), False)
+                                  "None" if value is None else str(value), False)
             self.last_publish = now
         except Exception as exc:
             LOG.warning("Télémétrie stabilisation momentanément indisponible: %s", exc)
