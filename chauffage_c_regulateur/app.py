@@ -13,6 +13,7 @@ from urllib import request, error
 from fuel_monitor import FuelMonitor
 from stability import Stabilizer
 from thermal_monitor import ThermalMonitor
+from thermal_model import HydraulicModel
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 LOG = logging.getLogger("chauffage_c")
@@ -152,6 +153,7 @@ class Demand:
     next_comfort_minutes: float | None = None
     next_setback_minutes: float | None = None
     actual_max_gap: float = 0.0
+    actual_rooms: list = field(default_factory=list)
     schedule_enabled: bool = False
 
 
@@ -274,6 +276,7 @@ def collect(opts=None):
         target = val(attrs.get("temperature"))
         if current is None or target is None:
             continue
+        result.actual_rooms.append((room, current, target))
         result.actual_max_gap = max(result.actual_max_gap, target - current)
         heating = attrs.get("hvac_action") == "heating"
         if result.schedule_enabled and record.get("state") == "auto" and attrs.get("room_state") == "Normal":
@@ -285,6 +288,10 @@ def collect(opts=None):
     thermometer = state(EVE_SENSOR)
     if eve and thermometer and eve.get("state") == "heat":
         result.actual_max_gap = max(result.actual_max_gap, (val(eve.get("attributes", {}).get("temperature")) or 0) - (val(thermometer.get("state")) or 0))
+        eve_current = val(thermometer.get("state"))
+        eve_target = val(eve.get("attributes", {}).get("temperature"))
+        if eve_current is not None and eve_target is not None:
+            result.actual_rooms.append((EVE_ROOM, eve_current, eve_target))
         valves = [state(e) for e in EVE_VALVES]
         opening = any(v and val(v.get("state")) is not None
                       and val(v["state"]) > 5 for v in valves)
@@ -411,12 +418,13 @@ class ThermalCorrection:
         return self.value
 
 
-def thermal_input(observer, demand, persistence, diagnostic=None):
+def thermal_input(observer, demand, persistence, diagnostic=None, model=None, forecast=None, snapshot=None):
     def reject(reason):
         if diagnostic is not None:
             diagnostic['reason'] = reason
         return None
-    snapshot = observer.snapshot
+    if snapshot is None:
+        snapshot = observer.snapshot
     if snapshot is None:
         LOG.info("Thermique rejet: historique indisponible")
         return reject("historique")
@@ -450,7 +458,18 @@ def thermal_input(observer, demand, persistence, diagnostic=None):
         return reject("stabilite")
     if values.get("confiance", 0) < 60:
         return reject("confiance")
-    candidate = thermal_candidate(demand, delta, departure, discrepancy, persistence)
+    if not (0 <= delta <= 20 and 35 <= departure <= 60 and abs(discrepancy) <= 3):
+        return reject("limites_physiques")
+    if demand.preheat_rooms or demand.setback_rooms:
+        return 0.0
+    if model is None:
+        return reject("modele_indisponible")
+    candidate, reason, info = model.evaluate(time.monotonic(), demand.actual_rooms, forecast, persistence)
+    if diagnostic is not None:
+        diagnostic.update(reason=reason, model=info)
+    LOG.info("Modèle hydraulique: %s %s", reason, json.dumps(info, ensure_ascii=False))
+    if candidate is None:
+        return reject(reason)
     if candidate == -0.5 and (values.get("inversion_30min") is None or values["inversion_30min"] > 10):
         LOG.info("Thermique rejet: inversions récentes, réduction non fiable")
         return reject("inversions")
@@ -582,6 +601,7 @@ class Controller:
         self.last_discovery = 0
         self.stabilizer = Stabilizer(mqtt_publish)
         self.thermal = ThermalCorrection()
+        self.hydraulic_model = HydraulicModel()
         self.stats = ThermalStats()
         try:
             with open("/data/thermal_state.json", encoding="utf-8") as f:
@@ -670,6 +690,7 @@ class Controller:
         safe = (demand.valid >= 8 and good_numbers and mode is not None
                 and mode.get("state") == "AUTO" and val(departure["state"]) <= 60)
         if not safe:
+            self.hydraulic_model.reset()
             self.thermal.step(now_cycle, None)
             self.stats.observe('securite', None, 0, 0, self.observer.snapshot, control)
             self.stabilizer.reset_pending(reset_filter=True)
@@ -706,9 +727,19 @@ class Controller:
         effect = round(proposed - baseline, 3)
         diagnostic = {'reason': 'desactive'}
         try:
-            candidate = thermal_input(self.observer, demand, persistence, diagnostic) if opts.get('thermal_correction', True) else None
+            snapshot = self.observer.snapshot
+            if opts.get('thermal_correction', True):
+                self.hydraulic_model.observe(time.monotonic(), snapshot, demand.actual_rooms, val(outdoor["state"]))
+                candidate = thermal_input(self.observer, demand, persistence, diagnostic,
+                                          model=self.hydraulic_model,
+                                          forecast=self.cached_change if opts["weather_anticipation"] else None,
+                                          snapshot=snapshot)
+            else:
+                self.hydraulic_model.reset()
+                candidate = None
         except Exception as exc:
             LOG.warning('Correction thermique indisponible: %s', exc)
+            self.hydraulic_model.reset()
             candidate = None
             diagnostic['reason'] = 'exception'
         correction = self.thermal.step(now_cycle, candidate)
@@ -727,7 +758,7 @@ class Controller:
             if not os.path.exists(path) or os.path.getsize(path) < 4 * 1024 * 1024:
                 with open(path, "a", encoding="utf-8") as trace:
                     trace.write(json.dumps({
-                        "ts": time.time(), "version": "0.4.7",
+                        "ts": time.time(), "version": "0.4.8",
                         "status": snap[1] if snap else None,
                         "departure": snap[2] if snap else None,
                         "return": snap[3] if snap else None,
@@ -736,6 +767,7 @@ class Controller:
                         "actual_max_gap": demand.actual_max_gap, "count": demand.count,
                         "preheat": bool(demand.preheat_rooms), "setback": bool(demand.setback_rooms),
                         "persistence": persistence, "reason": diagnostic['reason'],
+                        "rooms": demand.actual_rooms, "model": diagnostic.get("model", {}),
                         "candidate": candidate, "correction": correction,
                         "current": current, "before": before_thermal, "proposed": proposed,
                         "control": control}, separators=(",", ":")) + "\n")
@@ -805,7 +837,7 @@ def monitor_thermal_loop(observer):
 def main():
     opts = read_options()
     LOG.info("Régulation C %s; démarrage en %s",
-             "V0.4.7", "SIMULATION" if opts.get("dry_run", True) or not opts.get("automatic_control") else "ACTIF")
+             "V0.4.8", "SIMULATION" if opts.get("dry_run", True) or not opts.get("automatic_control") else "ACTIF")
     observer = ThermalMonitor(state, mqtt_publish)
     controller = Controller(opts, observer)
     fioul = FuelMonitor(api, state, mqtt_publish)
