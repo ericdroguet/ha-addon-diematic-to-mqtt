@@ -187,7 +187,7 @@ class FuelMonitor:
             last = next((entry for entry in reversed(self.rows)
                          if entry["allure"] == stage), None)
             self.publish(TOPIC + "/debit_allure_" + stage,
-                         str(last["l_j"]) if last else "unknown", True)
+                         str(last["l_j"]) if last else "None", True)
 
     def cycle(self):
         """Called by the app every 30s. No boiler actuator is accessed."""
