@@ -23,9 +23,12 @@ BASE_TOPIC = "chauffage_c/thermique"
 DISCOVERY_INTERVAL = 3600
 PUBLISH_INTERVAL = 60
 MAX_AGE_SECONDS = 600
-MAX_WINDOW_SECONDS = 1800
+MAX_WINDOW_SECONDS = 7200
 
 NUMERIC = {
+    "confiance": ("Confiance hydraulique", "%"),
+    "couverture_30min": ("Couverture mesures 30 min", "%"),
+    "delta_t_60min": ("Delta T médian 60 min", "°C"),
     "delta_t_regulation": ("Delta T régulation", "°C"),
     "variation_chaudiere_5min": ("Variation chaudière 5 min", "°C"),
     "temperature_ecs": ("Température ECS", "°C"),
@@ -82,7 +85,8 @@ class ThermalMonitor:
         self.boiler_samples = deque()
         self.quality = deque()
         self.stable_since = None
-        self.samples = deque()  # (epoch, signed delta)
+        self.samples = deque()  # (epoch, signed delta or None)
+        self.last_valid = None
         self.last_discovery = 0
         self.last_publish = 0
         self.last_status = None
@@ -130,10 +134,19 @@ class ThermalMonitor:
         self.last_discovery = now
 
     def _median(self, now, seconds):
-        subset = [(t, d) for t, d in self.samples if now - t <= seconds]
-        if len(subset) < 4 or subset[-1][0] - subset[0][0] < max(180, seconds * 0.8):
+        subset = [(t, d) for t, d in self.samples if now - t <= seconds and d is not None]
+        if len(subset) < 3 or self._coverage(now, seconds) < 0.8:
             return None
-        return round(statistics.median(d for _, d in subset), 2)
+        return round(statistics.median(max(0.0, d) for _, d in subset), 2)
+
+    def _coverage(self, now, seconds):
+        # Do not credit missing intervals; cap each observed interval.
+        points = list(self.samples)
+        covered = sum(max(0, min(75, b[0] - a[0], b[0] - max(a[0], now - seconds)))
+                      for a, b in zip(points, points[1:])
+                      if a[1] is not None and b[1] is not None
+                      and 0 < b[0] - a[0] <= 90 and b[0] > now - seconds)
+        return min(1.0, covered / seconds)
 
     def cycle(self):
         """Collect and publish best-effort telemetry; NEVER raise to controller."""
@@ -141,7 +154,7 @@ class ThermalMonitor:
             self._cycle()
         except Exception as exc:
             self.snapshot = None
-            self.samples.clear()
+            self.samples.append((self.clock(), None))
             self.stable_since = None
             self.quality.clear()
             self.boiler_samples.clear()
@@ -162,21 +175,27 @@ class ThermalMonitor:
             if delta < -35.0 or delta > 35.0:
                 status = "delta_incoherent"
             else:
-                if self.samples and now - self.samples[-1][0] > 180:
+                if self.last_valid is not None and now - self.last_valid > 600:
                     self.samples.clear()
-                self.samples.append((now, max(0.0, delta)))
+                    LOG.info('Historique thermique réinitialisé après interruption prolongée')
+                self.last_valid = now
+                self.samples.append((now, delta))
                 while self.samples and now - self.samples[0][0] > MAX_WINDOW_SECONDS:
                     self.samples.popleft()
                 values["delta_t"] = delta
                 values["delta_t_regulation"] = max(0.0, delta)
-                for minutes in (5, 15, 30):
+                for minutes in (5, 15, 30, 60):
                     median = self._median(now, minutes * 60)
                     if median is not None:
                         values[f"delta_t_{minutes}min"] = median
                 if diematic is not None:
                     values["ecart_depart_diematic"] = round(departure - diematic, 2)
         if status != "ok":
-            self.samples.clear()
+            self.samples.append((now, None))
+            LOG.info("Mesure thermique rejetée: départ=%s retour=%s état=%s", d_error, r_error, status)
+        while self.samples and now - self.samples[0][0] > MAX_WINDOW_SECONDS:
+            self.samples.popleft()
+        values["couverture_30min"] = 100 * self._coverage(now, 1800)
         if target is not None:
             values["cible_diematic"] = target
             if diematic is not None:
@@ -218,6 +237,7 @@ class ThermalMonitor:
             tracked = [(dt, abs(a[3])) for dt, a in spans if a[3] is not None]
             if sum(dt for dt, _ in tracked):
                 values["ecart_cible_moyen_30min"] = sum(dt * v for dt, v in tracked) / sum(dt for dt, _ in tracked)
+        values["confiance"] = values["couverture_30min"] * (0.75 + 0.25 * values.get("stabilite_30min", 0) / 100) if stable else 0
         self.status = status
         self.current = values
         self.snapshot = (time.monotonic(), status, departure, returned, dict(values))
