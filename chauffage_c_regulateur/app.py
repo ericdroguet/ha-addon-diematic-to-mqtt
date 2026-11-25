@@ -411,47 +411,149 @@ class ThermalCorrection:
         return self.value
 
 
-def thermal_input(observer, demand, persistence):
+def thermal_input(observer, demand, persistence, diagnostic=None):
+    def reject(reason):
+        if diagnostic is not None:
+            diagnostic['reason'] = reason
+        return None
     snapshot = observer.snapshot
     if snapshot is None:
         LOG.info("Thermique rejet: historique indisponible")
-        return None
+        return reject("historique")
     stamp, status, departure, returned, values = snapshot
     if not 0 <= time.monotonic() - stamp <= 180:
         LOG.info("Thermique rejet: calcul périmé")
-        return None
+        return reject("perime")
     if status != "ok":
         LOG.info("Thermique rejet: %s", status)
-        return None
+        return reject("sonde")
     delta = values.get("delta_t_30min")
     discrepancy = values.get("ecart_depart_diematic")
     if delta is None or discrepancy is None:
         LOG.info("Thermique rejet: historique 30 min ou comparaison Diematic indisponible")
-        return None
+        return reject("historique_ou_diematic")
     if not 0 <= departure - returned <= 20:
         LOG.info("Thermique rejet: delta instantané hors limites")
-        return None
+        return reject("delta_instantane")
     tracking = values.get("ecart_cible_diematic")
     target = values.get("cible_diematic")
     if tracking is None or target is None:
         LOG.info("Thermique rejet: cible Diematic indisponible")
-        return None
+        return reject("cible")
     if abs(tracking) > 3.0:
         LOG.info("Thermique rejet: transitoire Diematic; cible=%.2f écart réel-cible=%+.2f", target, tracking)
-        return None
+        return reject("transitoire")
     LOG.info("Suivi Diematic: cible=%.2f écart réel-cible=%+.2f", target, tracking)
     if values.get("stable_seconds", 0) < 300:
         LOG.info("Thermique rejet: stabilité hydraulique moins de 5 min")
-        return None
+        return reject("stabilite")
     candidate = thermal_candidate(demand, delta, departure, discrepancy, persistence)
     if candidate == -0.5 and (values.get("inversion_30min") is None or values["inversion_30min"] > 10):
         LOG.info("Thermique rejet: inversions récentes, réduction non fiable")
-        return None
+        return reject("inversions")
     if candidate is None:
+        if diagnostic is not None:
+            diagnostic["reason"] = "limites_physiques"
         LOG.info("Thermique rejet: limites physiques; delta30=%.2f départ=%.2f écart=%.2f", delta, departure, discrepancy)
     else:
         LOG.info("Thermique valide: delta30=%.2f départ=%.2f écart=%.2f", delta, departure, discrepancy)
     return candidate
+
+
+
+class ThermalStats:
+    """Bounded persistent five-minute buckets; diagnostic only."""
+    PATH = "/data/thermal_stats.json"
+    def __init__(self):
+        self.buckets = {}
+        self.previous = None
+        self.last_flush = 0
+        self.last_discovery = 0
+        try:
+            with open(self.PATH, encoding="utf-8") as f:
+                self.buckets = json.load(f)
+            if not isinstance(self.buckets, dict):
+                self.buckets = {}
+        except (OSError, ValueError, TypeError):
+            pass
+
+    def observe(self, reason, candidate, correction, effect, snapshot, control):
+        try:
+            now = time.time()
+            mono = time.monotonic()
+            key = str(int(now // 300))
+            cutoff = int(now // 300) - 2015
+            self.buckets = {k: v for k, v in self.buckets.items()
+                            if cutoff <= int(k) <= int(key)}
+            b = self.buckets.setdefault(key, {})
+            def add(k, n=1):
+                b[k] = b.get(k, 0) + n
+            add("cycles")
+            add("valid" if candidate is not None else "reject_" + reason)
+            if control and correction and self.previous is not None and correction != self.previous[1]:
+                add("positive" if correction > 0 else "negative")
+            if self.previous is not None:
+                old_time, old_correction, old_effect, old_inverse, old_control = self.previous
+                dt = min(120, max(0, mono - old_time))
+                add("observed_s", dt)
+                if old_control and old_correction:
+                    add("active_s", dt)
+                if old_control and old_effect:
+                    add("effect_s", dt)
+                if old_inverse:
+                    add("inverse_s", dt)
+            inverse = bool(snapshot and 0 <= mono - snapshot[0] <= 180
+                           and snapshot[1] == "ok" and snapshot[4].get("delta_t", 0) < 0)
+            self.previous = (mono, correction, effect, inverse, control)
+            if not self.last_flush or mono - self.last_flush >= 300:
+                self.flush()
+                self.last_flush = mono
+                self.publish(now)
+        except Exception as exc:
+            LOG.warning("Statistiques thermiques indisponibles: %s", exc)
+
+    def flush(self):
+        with open(self.PATH + ".tmp", "w", encoding="utf-8") as f:
+            json.dump(self.buckets, f, separators=(",", ":"))
+        os.replace(self.PATH + ".tmp", self.PATH)
+
+    def publish(self, now):
+        metrics = {"cycles": ("Cycles observés", None), "valid_pct": ("Cycles valides", "%"),
+                   "positive": ("Activations positives", None), "negative": ("Activations négatives", None),
+                   "active_min": ("Correction active", "min"), "effect_min": ("Effet sur proposition", "min"),
+                   "inverse_min": ("Inversions observées", "min"), "observed_h": ("Durée observée", "h"),
+                   "rejects": ("Motifs de rejet", None)}
+        discover = now - self.last_discovery >= 3600
+        for hours in (24, 168):
+            totals = {}
+            for k, b in self.buckets.items():
+                if int(k) > int(now // 300) - hours * 12:
+                    for name, n in b.items():
+                        totals[name] = totals.get(name, 0) + n
+            cycles = totals.get("cycles", 0)
+            reasons = {k[7:]: v for k, v in totals.items() if k.startswith("reject_")}
+            values = dict(totals, valid_pct=round(100 * totals.get("valid", 0) / cycles, 1) if cycles else "unknown",
+                          active_min=round(totals.get("active_s", 0)/60, 1),
+                          effect_min=round(totals.get("effect_s", 0)/60, 1),
+                          inverse_min=round(totals.get("inverse_s", 0)/60, 1),
+                          observed_h=round(totals.get("observed_s", 0)/3600, 2),
+                          rejects=json.dumps(reasons, ensure_ascii=False, separators=(",", ":")))
+            for key, (name, unit) in metrics.items():
+                identity = f"chauffage_c_stats_{key}_{hours}h"
+                topic = f"chauffage_c/stats/{key}/{hours}h"
+                if discover:
+                    config = {"name": f"{name} {hours}h", "unique_id": identity,
+                              "default_entity_id": "sensor." + identity, "object_id": identity,
+                              "state_topic": topic, "expire_after": 900, "entity_category": "diagnostic",
+                              "device": {"identifiers": ["chauffage_c_regulateur"], "name": "Régulation intelligente - Circuit C"}}
+                    if unit:
+                        config["unit_of_measurement"] = unit
+                    if key == "rejects":
+                        config["value_template"] = "{{ value_json | length }}"
+                        config["json_attributes_topic"] = topic
+                    mqtt_publish(f"homeassistant/sensor/{identity}/config", json.dumps(config, ensure_ascii=False), True)
+                mqtt_publish(topic, str(values.get(key, 0)), False)
+        self.last_discovery = now if discover else self.last_discovery
 
 
 class Controller:
@@ -470,6 +572,7 @@ class Controller:
         self.last_discovery = 0
         self.stabilizer = Stabilizer(mqtt_publish)
         self.thermal = ThermalCorrection()
+        self.stats = ThermalStats()
         try:
             with open("/data/thermal_state.json", encoding="utf-8") as f:
                 self.deficits = {str(k): min(7200.0, max(0.0, float(v)))
@@ -558,6 +661,7 @@ class Controller:
                 and mode.get("state") == "AUTO" and val(departure["state"]) <= 60)
         if not safe:
             self.thermal.step(now_cycle, None)
+            self.stats.observe('securite', None, 0, 0, self.observer.snapshot, control)
             self.stabilizer.reset_pending(reset_filter=True)
             self.stabilizer.status = "pause sécurité"
             self.stabilizer.publish()
@@ -590,16 +694,19 @@ class Controller:
         baseline = decide(demand, previous, live_opts, 0.0, persistence)
         proposed = decide(demand, previous, live_opts, anticipation, persistence)
         effect = round(proposed - baseline, 3)
+        diagnostic = {'reason': 'desactive'}
         try:
-            candidate = thermal_input(self.observer, demand, persistence) if opts.get('thermal_correction', True) else None
+            candidate = thermal_input(self.observer, demand, persistence, diagnostic) if opts.get('thermal_correction', True) else None
         except Exception as exc:
             LOG.warning('Correction thermique indisponible: %s', exc)
             candidate = None
+            diagnostic['reason'] = 'exception'
         correction = self.thermal.step(now_cycle, candidate)
         before_thermal = proposed
         if correction:
             proposed = decide(demand, previous, live_opts, anticipation + correction, persistence)
         LOG.info('Thermique: candidat=%s correction=%+.1f effet=%+.1f', candidate, correction, proposed - before_thermal)
+        self.stats.observe(diagnostic['reason'], candidate, correction, proposed - before_thermal, self.observer.snapshot, control)
         self.publish_weather_metrics(calculated, anticipation if calculated is not None else None,
                                      effect if calculated is not None else None)
         if opts["weather_anticipation"]:
@@ -664,7 +771,7 @@ def monitor_thermal_loop(observer):
 def main():
     opts = read_options()
     LOG.info("Régulation C %s; démarrage en %s",
-             "V0.4.2", "SIMULATION" if opts.get("dry_run", True) or not opts.get("automatic_control") else "ACTIF")
+             "V0.4.5", "SIMULATION" if opts.get("dry_run", True) or not opts.get("automatic_control") else "ACTIF")
     observer = ThermalMonitor(state, mqtt_publish)
     controller = Controller(opts, observer)
     fioul = FuelMonitor(api, state, mqtt_publish)
@@ -685,6 +792,10 @@ def main():
                     break
                 time.sleep(1)
     finally:
+        try:
+            controller.stats.flush()
+        except Exception as exc:
+            LOG.warning('Sauvegarde statistiques impossible: %s', exc)
         if controller.touched:
             # Un SIGTERM est attendu lors d'une mise à jour / d'un redémarrage.
             # Laisser la Diematic avec sa dernière consigne sûre, plutôt que
