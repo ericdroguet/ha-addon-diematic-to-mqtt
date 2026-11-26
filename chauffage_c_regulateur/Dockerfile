@@ -11,5 +11,7 @@ COPY solar_monitor.py /app/solar_monitor.py
 COPY test_solar_monitor.py /app/test_solar_monitor.py
 COPY solar_forecast.py /app/solar_forecast.py
 COPY test_solar_forecast.py /app/test_solar_forecast.py
-RUN python -m py_compile app.py thermal_monitor.py thermal_model.py stability.py fuel_monitor.py solar_monitor.py solar_forecast.py && python -m unittest -v test_thermal_model test_solar_monitor test_solar_forecast
+COPY salon_tv_shadow.py /app/salon_tv_shadow.py
+COPY test_salon_tv_shadow.py /app/test_salon_tv_shadow.py
+RUN python -m py_compile app.py thermal_monitor.py thermal_model.py stability.py fuel_monitor.py solar_monitor.py solar_forecast.py salon_tv_shadow.py && python -m unittest -v test_thermal_model test_solar_monitor test_solar_forecast test_salon_tv_shadow
 CMD ["python3", "-u", "/app/app.py"]
