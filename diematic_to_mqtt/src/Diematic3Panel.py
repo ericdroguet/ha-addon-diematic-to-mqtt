@@ -7,6 +7,7 @@ import DDModbus
 import time,datetime,pytz
 from enum import IntEnum
 from Diematic import Diematic,DDREGISTER
+from advanced_settings import AdvancedProbe
 
 #definition for state machine used for modBus data exchange
 class DDModBusStatus(IntEnum):
@@ -22,6 +23,7 @@ class Diematic3Panel(Diematic):
 		
 		#state machine initialisation
 		self.busStatus=DDModBusStatus.INIT;
+		self.advanced_probe = AdvancedProbe()
 		
 		super().__init__(ip,port,regulatorAddress,0,boilerTimezone,syncTime)
 
@@ -279,6 +281,7 @@ class Diematic3Panel(Diematic):
 								self.lastSynchroTimestamp=time.time();
 							
 								#refresh regulator attribute
+								self.advanced_probe.poll(self.modBusInterface, self.regulatorAddress, self.registers, self.logger, self.masterTime)
 								self.refreshAttributes();
 								
 								#clear Flag

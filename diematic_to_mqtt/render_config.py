@@ -29,6 +29,7 @@ regulatorType:{o.get('regulator_type', 'Diematic3')}
 timezone:{o.get('timezone', 'CET')}
 timeSync:{b2s(o.get('time_sync', False))}
 period: {o.get('period', 10)}
+advancedRead: {b2s(o.get('diematic3_advanced_read', False))}
 enable_circuit_A: {b2s(o.get('enable_circuit_a', False))}
 enable_circuit_B: {b2s(o.get('enable_circuit_b', False))}
 enable_circuit_C: {b2s(o.get('enable_circuit_c', False))}

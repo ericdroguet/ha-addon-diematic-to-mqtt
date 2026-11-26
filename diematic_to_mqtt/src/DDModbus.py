@@ -201,7 +201,7 @@ class DDModbus:
 			except socket.error as exc:
 				return False;
 				
-	def masterReadAnalog(self,modbusAddress,regAddress,regNb):
+	def masterReadAnalog(self,modbusAddress,regAddress,regNb,timeout=None):
 		
 		#build request
 		request=bytearray();
@@ -222,7 +222,7 @@ class DDModbus:
 		
 		#wait for answer
 		try:
-			self.socket.settimeout(DDModbus.MASTER_RX_TIMEOUT);
+			self.socket.settimeout(DDModbus.MASTER_RX_TIMEOUT if timeout is None else timeout);
 			answer=self.socket.recv(2048);
 			self.logger.debug('Answer received: '+answer.hex());
 			

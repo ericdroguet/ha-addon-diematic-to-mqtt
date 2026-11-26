@@ -37,7 +37,7 @@ class Hassio:
 		self.payload_available=payload_available;
 		self.payload_not_available=payload_not_available;
 	
-	def addSensor(self,object_id,name,deviceClass,shortStateTopic,valueTemplate,unit_of_measurement):
+	def addSensor(self,object_id,name,deviceClass,shortStateTopic,valueTemplate,unit_of_measurement,shortAvailabilityTopic=None):
 		#build discovery topic
 		discoveryTopic=self.discovery_prefix+'/sensor/'+self.clientId+'/'+object_id+'/config';
 		#build discovery message payload
@@ -52,6 +52,13 @@ class Hassio:
 		payload["availability_topic"]=self.availabilityTopic;
 		payload["payload_available"]=self.payload_available;
 		payload["payload_not_available"]=self.payload_not_available;
+		if shortAvailabilityTopic is not None:
+			for key in ('availability_topic', 'payload_available', 'payload_not_available'):
+				payload.pop(key, None)
+			payload['availability'] = [
+				{"topic": self.availabilityTopic, "payload_available": self.payload_available, "payload_not_available": self.payload_not_available},
+				{"topic": self.topicRoot + '/' + shortAvailabilityTopic, "payload_available": self.payload_available, "payload_not_available": self.payload_not_available}]
+			payload['availability_mode'] = 'all'
 		if (unit_of_measurement is not None):
 			payload["unit_of_measurement"]=unit_of_measurement;
 		payload['device'] = self.device

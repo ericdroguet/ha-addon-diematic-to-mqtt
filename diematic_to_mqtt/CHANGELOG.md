@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.8
+
+- Optional `diematic3_advanced_read` (default false): read-only probe for calculated boiler demand (620), C room influence/slope/min/max (668–671), boiler min/max (677–678). Sofrel S500 p.4. No writes or change to existing controls.
+- Probe only in existing master windows after core reads, one block every 30 seconds, short timeout and fail-stop on missing responses/alias mismatch. Values outside documented bounds or stale/offline are unavailable. Enable explicitly and validate on the physical controller before exposing any writes.
+- No automatic tuning of boiler safety limits, pumps, burner or mixing valve.
+
 ## 1.1.7
 
 - Diematic 3: six read-only diagnostic binary sensors from existing registers 427 (stage 1/2 burner commands, burner alarm contact, auxiliary pump command) and 428 (circuit C valve open/close commands), using Sofrel S500 table D1 bit mapping. These are output orders, not measured flame or valve position; verify on the actual boiler before using for control or fuel integration.

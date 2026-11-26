@@ -8,6 +8,7 @@ import DDModbus,Diematic3Panel,Diematic4Panel,DiematicDeltaPanel,Hassio
 import paho.mqtt.client as mqtt
 import json
 from diagnostics import OUTPUTS, diagnostic_messages, raw_snapshot
+from advanced_settings import SETTINGS
 import time,datetime
 
 
@@ -122,6 +123,8 @@ def diematicPublish(self):
 	if regulatorType == 'Diematic3':
 		for topic, value in diagnostic_messages(self.registers, self.availability).items():
 			buffer.update(topic, value)
+		for topic, value in self.advanced_probe.messages(self.availability).items():
+			buffer.update(topic, value)
 	if publishRawRegisters:
 		buffer.update('raw/registers', raw_snapshot(self.registers, self.availability, True))
 
@@ -162,6 +165,11 @@ def sendDiscoveryMessages():
 		for address, bit, object_id, label, topic, device_class in OUTPUTS:
 			hassio.addBinarySensor(object_id, label, device_class, topic, '1', '0',
 				enabled_by_default=True, shortAvailabilityTopic=f'diagnostic/{address}/availability')
+
+	if regulatorType == 'Diematic3':
+		for address, object_id, label, _, _, _, unit in SETTINGS:
+			hassio.addSensor(object_id, label, 'temperature' if unit == '°C' else None,
+				f'advanced/{address}', None, unit, shortAvailabilityTopic=f'advanced/{address}/availability')
 
 	#hot water
 	hassio.addBinarySensor('hot_water_pump',"Pompe ECS",None,'hotWater/pump',"1","0");	
@@ -223,6 +231,8 @@ def on_connect(client, userdata, flags, reason_code, properties=None):
 	if regulatorType == 'Diematic3':
 		for address in (427, 428):
 			client.publish(f'{mqttTopicPrefix}/diagnostic/{address}/availability', OFFLINE, 1, True)
+		for address, *_ in SETTINGS:
+			client.publish(f'{mqttTopicPrefix}/advanced/{address}/availability', OFFLINE, 1, True)
 	client.publish(mqttTopicPrefix + '/raw/registers', '', 1, True)
 	# Annonce les entites au demarrage, meme sans message de naissance HA.
 	if hassioDiscoveryEnable:
@@ -382,6 +392,9 @@ if __name__ == '__main__':
 			Diematic3Panel.Diematic3Panel.updateCallback=diematicPublish;
 			panel=Diematic3Panel.Diematic3Panel(modbusAddress,int(modbusPort),modbusRegulatorAddress,modbusInterfaceAddress,boilerTimezone,boilerTimeSync);
 		
+		if regulatorType == 'Diematic3':
+			panel.advanced_probe.enabled = config.getboolean('Boiler','advancedRead',fallback=False)
+
 		#set refresh period, with a minimum of 10s
 		panel.refreshPeriod=max(period,10);
 		
