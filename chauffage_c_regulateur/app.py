@@ -15,6 +15,7 @@ from stability import Stabilizer
 from thermal_monitor import ThermalMonitor
 from thermal_model import HydraulicModel
 from solar_monitor import SolarMonitor
+from solar_forecast import SolarForecast
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 LOG = logging.getLogger("chauffage_c")
@@ -759,7 +760,7 @@ class Controller:
             if not os.path.exists(path) or os.path.getsize(path) < 4 * 1024 * 1024:
                 with open(path, "a", encoding="utf-8") as trace:
                     trace.write(json.dumps({
-                        "ts": time.time(), "version": "0.4.10",
+                        "ts": time.time(), "version": "0.4.11",
                         "status": snap[1] if snap else None,
                         "departure": snap[2] if snap else None,
                         "return": snap[3] if snap else None,
@@ -847,13 +848,15 @@ def monitor_solar_loop(observer):
 def main():
     opts = read_options()
     LOG.info("Régulation C %s; démarrage en %s",
-             "V0.4.10", "SIMULATION" if opts.get("dry_run", True) or not opts.get("automatic_control") else "ACTIF")
+             "V0.4.11", "SIMULATION" if opts.get("dry_run", True) or not opts.get("automatic_control") else "ACTIF")
     observer = ThermalMonitor(state, mqtt_publish)
     controller = Controller(opts, observer)
     fioul = FuelMonitor(api, state, mqtt_publish)
     threading.Thread(target=monitor_thermal_loop, args=(observer,), name="circuit-c-thermal", daemon=True).start()
     solar = SolarMonitor(state, mqtt_publish)
     threading.Thread(target=monitor_solar_loop, args=(solar,), name="circuit-c-solar", daemon=True).start()
+    solar_forecast = SolarForecast(state, mqtt_publish, ROOMS, EVE_ROOM, EVE_SENSOR)
+    threading.Thread(target=monitor_solar_loop, args=(solar_forecast,), name="circuit-c-solar-forecast", daemon=True).start()
     try:
         while not STOP:
             fioul.cycle()
