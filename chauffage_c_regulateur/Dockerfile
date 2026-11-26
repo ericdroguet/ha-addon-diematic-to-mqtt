@@ -7,5 +7,7 @@ COPY stability.py /app/stability.py
 COPY thermal_monitor.py /app/thermal_monitor.py
 COPY thermal_model.py /app/thermal_model.py
 COPY test_thermal_model.py /app/test_thermal_model.py
-RUN python -m py_compile app.py thermal_monitor.py thermal_model.py stability.py fuel_monitor.py && python -m unittest -v test_thermal_model
+COPY solar_monitor.py /app/solar_monitor.py
+COPY test_solar_monitor.py /app/test_solar_monitor.py
+RUN python -m py_compile app.py thermal_monitor.py thermal_model.py stability.py fuel_monitor.py solar_monitor.py && python -m unittest -v test_thermal_model test_solar_monitor
 CMD ["python3", "-u", "/app/app.py"]
