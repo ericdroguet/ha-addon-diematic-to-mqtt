@@ -16,6 +16,7 @@ from thermal_monitor import ThermalMonitor
 from thermal_model import HydraulicModel
 from solar_monitor import SolarMonitor
 from solar_forecast import SolarForecast
+from salon_tv_shadow import SalonTVMonitor
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 LOG = logging.getLogger("chauffage_c")
@@ -845,10 +846,24 @@ def monitor_solar_loop(observer):
             time.sleep(1)
 
 
+def monitor_salon_tv_loop(observer):
+    """Read-only simulation: errors must not affect existing regulation."""
+    LOG.info("Salon TV: compensation Eve/Danfoss en simulation uniquement")
+    while not STOP:
+        try:
+            observer.cycle()
+        except Exception as exc:
+            LOG.warning("Simulation Salon TV indisponible: %s", exc)
+        for _ in range(60):
+            if STOP:
+                break
+            time.sleep(1)
+
+
 def main():
     opts = read_options()
     LOG.info("Régulation C %s; démarrage en %s",
-             "V0.4.11", "SIMULATION" if opts.get("dry_run", True) or not opts.get("automatic_control") else "ACTIF")
+             "V0.4.12", "SIMULATION" if opts.get("dry_run", True) or not opts.get("automatic_control") else "ACTIF")
     observer = ThermalMonitor(state, mqtt_publish)
     controller = Controller(opts, observer)
     fioul = FuelMonitor(api, state, mqtt_publish)
@@ -857,6 +872,8 @@ def main():
     threading.Thread(target=monitor_solar_loop, args=(solar,), name="circuit-c-solar", daemon=True).start()
     solar_forecast = SolarForecast(state, mqtt_publish, ROOMS, EVE_ROOM, EVE_SENSOR)
     threading.Thread(target=monitor_solar_loop, args=(solar_forecast,), name="circuit-c-solar-forecast", daemon=True).start()
+    salon_tv = SalonTVMonitor(state, mqtt_publish)
+    threading.Thread(target=monitor_salon_tv_loop, args=(salon_tv,), name="circuit-c-salon-tv-shadow", daemon=True).start()
     try:
         while not STOP:
             fioul.cycle()
