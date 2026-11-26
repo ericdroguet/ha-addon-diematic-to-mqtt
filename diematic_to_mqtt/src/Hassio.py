@@ -58,7 +58,7 @@ class Hassio:
 		#send discovery message
 		self.mqtt.publish(discoveryTopic,json.dumps(payload),1,False);
 
-	def addBinarySensor(self,object_id,name,deviceClass,shortStateTopic,payload_on,payload_off):
+	def addBinarySensor(self,object_id,name,deviceClass,shortStateTopic,payload_on,payload_off,enabled_by_default=False,shortAvailabilityTopic=None):
 		#build discovery topic
 		discoveryTopic=self.discovery_prefix+'/binary_sensor/'+self.clientId+'/'+object_id+'/config';
 		#build discovery message payload
@@ -73,7 +73,15 @@ class Hassio:
 		payload["availability_topic"]=self.availabilityTopic;
 		payload["payload_available"]=self.payload_available;
 		payload["payload_not_available"]=self.payload_not_available;
-		payload["enabled_by_default"]=False;
+		payload["enabled_by_default"]=enabled_by_default;
+		if shortAvailabilityTopic is not None:
+			for key in ('availability_topic', 'payload_available', 'payload_not_available'):
+				payload.pop(key, None)
+			payload["availability"] = [
+				{"topic": self.availabilityTopic, "payload_available": self.payload_available, "payload_not_available": self.payload_not_available},
+				{"topic": self.topicRoot + '/' + shortAvailabilityTopic, "payload_available": self.payload_available, "payload_not_available": self.payload_not_available}
+			]
+			payload["availability_mode"] = "all"
 		payload['device'] = self.device
 		#send discovery message
 		self.mqtt.publish(discoveryTopic,json.dumps(payload),1,False);

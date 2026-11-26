@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.1.7
+
+- Diematic 3: six read-only diagnostic binary sensors from existing registers 427 (stage 1/2 burner commands, burner alarm contact, auxiliary pump command) and 428 (circuit C valve open/close commands), using Sofrel S500 table D1 bit mapping. These are output orders, not measured flame or valve position; verify on the actual boiler before using for control or fuel integration.
+- Invalid/missing words and offline regulator mark diagnostics unavailable, not active or zero. Existing entity IDs and control logic unchanged.
+- Optional `mqtt_publish_raw_registers` (default false): retained JSON snapshot of registers already polled; no additional Modbus reads, no writes, clears retained snapshot on reconnect/offline/disable. Reuses the existing changed-value MQTT buffer.
+- Optional `log_level` (default INFO): DEBUG/INFO/WARNING/ERROR. DEBUG may be verbose; use temporarily.
+- Keep existing circuit C, ECS, two-stage counters and fuel monitoring unchanged. No extra register polling in this version.
+- Source for bit definitions: https://community.jeedom.com/uploads/short-url/qjNF6pFIcvSXRka7EFug2vIEKZE.pdf (Table D1, p.6).
+
 ## 1.1.6
 
 - Fix Diematic 3 circuit C mode control from Home Assistant: process `zoneC/mode/set` commands and write register 38 (`MODE_C`).

@@ -7,6 +7,7 @@ import logging, logging.config
 import DDModbus,Diematic3Panel,Diematic4Panel,DiematicDeltaPanel,Hassio
 import paho.mqtt.client as mqtt
 import json
+from diagnostics import OUTPUTS, diagnostic_messages, raw_snapshot
 import time,datetime
 
 
@@ -117,6 +118,13 @@ def diematicPublish(self):
 	buffer.update('zoneC/nightTemp',floatValue(self.zoneCNightTargetTemp));
 	buffer.update('zoneC/antiiceTemp',floatValue(self.zoneCAntiiceTargetTemp));
 
+	# Read-only diagnostics from the existing poll; no additional Modbus I/O.
+	if regulatorType == 'Diematic3':
+		for topic, value in diagnostic_messages(self.registers, self.availability).items():
+			buffer.update(topic, value)
+	if publishRawRegisters:
+		buffer.update('raw/registers', raw_snapshot(self.registers, self.availability, True))
+
 	#send MQTT messages
 	buffer.send();
 
@@ -149,6 +157,12 @@ def sendDiscoveryMessages():
 	hassio.addSensor('burner2_starts',"Démarrages Brûleur Allure 2 (≈10)",None,'burner2/starts',None,None);
 	hassio.addSensor('fuel_estimated_total',"Fioul estimé cumulé",None,'fuel/estimatedTotalLiters',None,"L");
 	
+	# Diematic 3 output commands, not physical feedback.
+	if regulatorType == 'Diematic3':
+		for address, bit, object_id, label, topic, device_class in OUTPUTS:
+			hassio.addBinarySensor(object_id, label, device_class, topic, '1', '0',
+				enabled_by_default=True, shortAvailabilityTopic=f'diagnostic/{address}/availability')
+
 	#hot water
 	hassio.addBinarySensor('hot_water_pump',"Pompe ECS",None,'hotWater/pump',"1","0");	
 	hassio.addSensor('hot_water_temp',"Température ECS",'temperature','hotWater/temp',None,"°C");
@@ -205,6 +219,11 @@ def on_connect(client, userdata, flags, reason_code, properties=None):
 	buffer.clear();
 	buffer.update('status','Offline');
 	buffer.send();
+	# Invalidate retained diagnostics until the next successful refresh.
+	if regulatorType == 'Diematic3':
+		for address in (427, 428):
+			client.publish(f'{mqttTopicPrefix}/diagnostic/{address}/availability', OFFLINE, 1, True)
+	client.publish(mqttTopicPrefix + '/raw/registers', '', 1, True)
 	# Annonce les entites au demarrage, meme sans message de naissance HA.
 	if hassioDiscoveryEnable:
 		sendDiscoveryMessages();
@@ -336,6 +355,7 @@ if __name__ == '__main__':
 		
 		mqttClientId=config.get('MQTT','clientId');
 		mqttTopicPrefix=config.get('MQTT','topicPrefix')+'/'+mqttClientId;
+		publishRawRegisters=config.getboolean('MQTT','publishRawRegisters',fallback=False)
 		
 		logger.debug('Broker: '+mqttBrokerHost+' : '+mqttBrokerPort);
 		logger.debug('Topic Root: '+mqttTopicPrefix);	

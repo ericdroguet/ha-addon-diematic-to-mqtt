@@ -22,6 +22,7 @@ brokerLogin: {o.get('mqtt_broker_login', '')}
 brokerPassword: {o.get('mqtt_broker_password', '')}
 topicPrefix: {o.get('topic_prefix', 'home/heater')}
 clientId: {o.get('client_id', 'boiler')}
+publishRawRegisters: {b2s(o.get('mqtt_publish_raw_registers', False))}
 
 [Boiler]
 regulatorType:{o.get('regulator_type', 'Diematic3')}
@@ -42,3 +43,13 @@ os.makedirs("/app/log", exist_ok=True)
 
 with open("/app/conf/Diematic32MQTT.conf", "w") as f:
     f.write(conf)
+
+# Keep normal INFO logging by default; enable frame logs only for diagnostics.
+log_level = o.get('log_level', 'INFO')
+if log_level not in ('DEBUG', 'INFO', 'WARNING', 'ERROR'):
+    log_level = 'INFO'
+with open('/app/conf/logging.conf', 'r') as f:
+    logging_conf = f.read()
+logging_conf = logging_conf.replace('[logger_root]\nlevel=INFO', f'[logger_root]\nlevel={log_level}')
+with open('/app/conf/logging.conf', 'w') as f:
+    f.write(logging_conf)
