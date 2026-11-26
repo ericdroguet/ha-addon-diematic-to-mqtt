@@ -1,6 +1,6 @@
-"""Optional, read-only Sofrel S500 p.4 probe for Diematic 3.
-The published values are unconfirmed until the actual device answers.
-No write path. Reject invalid words and stop additional reads on a failed probe.
+"""Optional Sofrel S500 p.4 probe for Diematic 3.
+Only register 678 can be written by the panel; published values come from reads.
+Reject invalid words and stop additional reads on a failed probe.
 """
 import time
 
@@ -44,6 +44,19 @@ class AdvancedProbe:
         self.index = 0
         self.next_read = 0.0
         self.values = {}
+        self.expected_max = None
+
+    def can_write_max(self):
+        item = self.values.get(678)
+        return (self.enabled and not self.stopped and self.expected_max is None
+                and item is not None and time.monotonic() - item[1] < 150
+                and decode(678, item[0]) is not None)
+
+    def verify_max(self, expected):
+        self.expected_max = expected
+        self.values.pop(678, None)
+        self.index = BLOCKS.index((677, 2))
+        self.next_read = 0.0
 
     def poll(self, interface, regulator, core, logger, master_time):
         if not self.enabled or self.stopped or time.monotonic() < self.next_read:
@@ -66,6 +79,13 @@ class AdvancedProbe:
             return
         stamp = time.monotonic()
         self.values.update({a: (v,stamp) for a,v in result.items()})
+        if 678 in result and self.expected_max is not None:
+            actual = result[678]
+            if actual == self.expected_max:
+                logger.info("Maximum chaudière confirmed: %.1f °C", actual / 10)
+            else:
+                logger.warning("Maximum chaudière not confirmed: requested %s, read %s", self.expected_max, actual)
+            self.expected_max = None
         self.index = (self.index + 1) % len(BLOCKS)
 
     def messages(self, online):

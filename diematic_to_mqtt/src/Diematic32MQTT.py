@@ -131,6 +131,9 @@ def diematicPublish(self):
 	#send MQTT messages
 	buffer.send();
 
+def self_advanced_write_enabled():
+	return regulatorType == 'Diematic3' and panel.advanced_probe.enabled
+
 def sendDiscoveryMessages():
 	logger.debug('Sending HA discovery messages');
 		
@@ -170,6 +173,9 @@ def sendDiscoveryMessages():
 		for address, object_id, label, _, _, _, unit in SETTINGS:
 			hassio.addSensor(object_id, label, 'temperature' if unit == '°C' else None,
 				f'advanced/{address}', None, unit, shortAvailabilityTopic=f'advanced/{address}/availability')
+
+		if self_advanced_write_enabled():
+			hassio.addNumber('boiler_max_temp_set', "Maximum chaudière - réglage", 'advanced/678', 'advanced/678/set', 70, 80, 1, "°C", shortAvailabilityTopic='advanced/678/availability')
 
 	#hot water
 	hassio.addBinarySensor('hot_water_pump',"Pompe ECS",None,'hotWater/pump',"1","0");	
@@ -312,7 +318,12 @@ def dateSet(client, userdata, message):
 def paramSet(client, userdata, message):
 	try:
 		logger.debug('MQTT msg received :'+message.topic+' '+str(message.payload));
-		if (message.topic[-8:]=='Temp/set'):
+		if message.topic == mqttTopicPrefix + '/advanced/678/set':
+			if self_advanced_write_enabled() and not message.retain:
+				panel.request_boiler_max_temp(message.payload)
+			else:
+				logger.warning('Boiler maximum command ignored (retained or unavailable)')
+		elif (message.topic[-8:]=='Temp/set'):
 			tempSet(client, userdata, message);
 		elif (message.topic[-8:]=='mode/set'):
 			modeSet(client, userdata, message);

@@ -93,7 +93,7 @@ class Hassio:
 		#send discovery message
 		self.mqtt.publish(discoveryTopic,json.dumps(payload),1,False);
 	
-	def addNumber(self,object_id,name,shortStateTopic,shortCommandTopic,min,max,step,unit_of_measurement):
+	def addNumber(self,object_id,name,shortStateTopic,shortCommandTopic,min,max,step,unit_of_measurement,shortAvailabilityTopic=None):
 		#build discovery topic
 		discoveryTopic=self.discovery_prefix+'/number/'+self.clientId+'/'+object_id+'/config';
 		#build discovery message payload
@@ -109,6 +109,15 @@ class Hassio:
 		payload["min"]=min;
 		payload["max"]=max;
 		payload["step"]=step;
+		if shortAvailabilityTopic is not None:
+			for key in ('availability_topic', 'payload_available', 'payload_not_available'):
+				payload.pop(key, None)
+			payload['availability'] = [
+				{"topic": self.availabilityTopic, "payload_available": self.payload_available, "payload_not_available": self.payload_not_available},
+				{"topic": self.topicRoot + '/' + shortAvailabilityTopic, "payload_available": self.payload_available, "payload_not_available": self.payload_not_available}]
+			payload['availability_mode'] = 'all'
+			payload['retain'] = False
+			payload['optimistic'] = False
 		if (unit_of_measurement is not None):
 			payload["unit_of_measurement"]=unit_of_measurement;
 		payload['device'] = self.device

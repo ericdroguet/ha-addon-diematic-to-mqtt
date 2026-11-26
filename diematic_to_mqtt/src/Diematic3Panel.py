@@ -27,6 +27,17 @@ class Diematic3Panel(Diematic):
 		
 		super().__init__(ip,port,regulatorAddress,0,boilerTimezone,syncTime)
 
+	def request_boiler_max_temp(self, payload):
+		try:
+			value = float(payload)
+		except (ValueError, TypeError, OverflowError):
+			self.logger.warning('Maximum chaudière: invalid MQTT payload')
+			return
+		if not 70 <= value <= 80 or not value.is_integer() or not self.availability or not self.advanced_probe.can_write_max():
+			self.logger.warning('Maximum chaudière: rejected value or unavailable readback')
+			return
+		self.regUpdateRequest.put(DDModbus.RegisterSet(678, [int(value * 10)]))
+
 #this property is used to get register values from the regulator Diematic3
 	def refreshRegisters(self):
 		#update registers 1->63
@@ -266,6 +277,13 @@ class Diematic3Panel(Diematic):
 						while (not(self.regUpdateRequest.empty()) and ((time.time()-self.masterTime) < 2)):
 							regSet=self.regUpdateRequest.get(False)
 							self.logger.debug('Write Request :'+str(regSet.address)+':'+str(regSet.data));
+							if regSet.address == 678:
+								if not self.advanced_probe.can_write_max() or len(regSet.data) != 1 or regSet.data[0] not in range(700, 801, 10):
+									self.logger.warning('Maximum chaudière: write rejected (invalid or stale register)')
+									continue
+								if self.advanced_probe.values[678][0] == regSet.data[0]:
+									continue
+								self.advanced_probe.verify_max(regSet.data[0])
 							#write to Analog registers
 							if ( not self.modBusInterface.masterWriteAnalog(self.regulatorAddress,regSet.address,regSet.data)):
 								#And cancel Master Slave Synchro Flag in case of error
