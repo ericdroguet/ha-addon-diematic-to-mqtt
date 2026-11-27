@@ -1,6 +1,6 @@
 import unittest
 from dataclasses import asdict
-from policy import Cycle, Settings, evaluate, restore, unused_recharge
+from policy import Cycle, Settings, evaluate, restore, unused_recharge, fresh_temperature
 
 class PolicyTest(unittest.TestCase):
     def setUp(self):
@@ -72,6 +72,15 @@ class PolicyTest(unittest.TestCase):
         self.assertFalse(unused_recharge(records, [cold, hot], now=200))
         records["timer.ecs_hybride_limite"]["last_changed"] = "1970-01-01T00:02:30+00:00"
         self.assertFalse(unused_recharge(records, [cold], now=200))
+
+    def test_constant_temperature_and_stale_heartbeat(self):
+        now = 600
+        records = {"sensor.hot_water_temp": {"state": "50.5", "last_reported": "1970-01-01T00:01:00+00:00"},
+                   "sensor.heater_datetime": {"state": "01/01/1970 01:10", "last_reported": "1970-01-01T00:09:50+00:00"}}
+        self.assertEqual(fresh_temperature(records, now), 50.5)
+        self.assertIsNone(fresh_temperature(records, now+130))
+        records["sensor.hot_water_temp"]["state"] = "unavailable"
+        self.assertIsNone(fresh_temperature(records, now))
 
 if __name__ == "__main__":
     unittest.main()

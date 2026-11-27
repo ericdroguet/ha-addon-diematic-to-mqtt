@@ -36,3 +36,7 @@ Autorisation explicite input_boolean.ecs_hybride_actif. Minuterie restaurable ti
 ### 0.1.2
 
 Une recharge fioul n'ayant pas encore demandé de complément peut reprendre après une interruption, même au-dessus de 50 °C et sous 55 °C. Migration unique du verrouillage 0.1.1 uniquement sur preuve de température sous 48 °C postérieure à la dernière transition du contacteur (arrêt) et du minuteur (idle). Attendre les deux consignes réelles à 50 °C et la pompe arrêtée. Aucun redémarrage d'un complément déjà tenté.
+
+### 0.1.3
+
+La fraîcheur ECS est vérifiée via l'horloge de la même trame Diematic (120 s max depuis sa publication et heure cohérente), pas via une variation obligatoire de la température. Les valeurs indisponibles restent invalides.

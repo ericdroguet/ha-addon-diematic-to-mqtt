@@ -6,7 +6,7 @@ from pathlib import Path
 from urllib.request import Request, urlopen
 from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
-from policy import Cycle, Settings, Proposal, evaluate, unused_recharge
+from policy import Cycle, Settings, Proposal, evaluate, unused_recharge, fresh_temperature
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 LOG = logging.getLogger("ecs")
@@ -111,19 +111,14 @@ def main():
         pass
     last = None
     last_log = 0
-    LOG.info("ECS 0.1.2 : reprise avant complément, aucun redémarrage électrique")
+    LOG.info("ECS 0.1.3 : horloge Diematic comme témoin de lecture, reprise avant complément")
     try:
         while not STOP:
             now = time.time()
             try:
                 rec = {r["entity_id"]: r for r in api("/states")}
                 def val(e): return rec.get(e, {}).get("state")
-                try:
-                    r = rec[TEMP]
-                    stamp = datetime.fromisoformat(r.get("last_reported") or r["last_updated"]).timestamp()
-                    temp = float(r["state"]) if 0 <= now-stamp <= 180 else None
-                except (ValueError, TypeError, KeyError):
-                    temp = None
+                temp = fresh_temperature(rec, now)
                 enabled = val(ENABLE) == "on"
                 valid = (enabled and val(GUARD) == "on" and all(val(e) == "off" for e in OLD)
                          and val(AUTO) == "on" and val(SEASON) == "Hiver - Mixte"

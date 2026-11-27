@@ -75,6 +75,28 @@ def evaluate(cycle, settings, *, now, temp, color, period, pump, allowed):
         return Proposal("fuel", target, False, "attente 50 °C et fin pompe ECS")
     return Proposal("locked", target, False, cycle.reason)
 
+def fresh_temperature(records, now):
+    """The bridge emits changed values only; the panel clock is the shared poll heartbeat."""
+    try:
+        item = records["sensor.hot_water_temp"]
+        clock = records["sensor.heater_datetime"]
+        def age(record):
+            return now - datetime.fromisoformat(record.get("last_reported") or record["last_updated"]).timestamp()
+        value = float(item["state"])
+        if not isfinite(value) or not 0 <= value <= 95:
+            return None
+        # A valid advancing panel clock is refreshed by the same successful read
+        # as ECS; never substitute a different unrelated integration's heartbeat.
+        if not 0 <= age(clock) <= 120:
+            return None
+        from zoneinfo import ZoneInfo
+        panel_time = datetime.strptime(clock["state"], "%d/%m/%Y %H:%M").replace(tzinfo=ZoneInfo("Europe/Paris")).timestamp()
+        if not -60 <= now - panel_time <= 180:
+            return None
+        return value
+    except (ValueError, TypeError, KeyError, OverflowError):
+        return None
+
 def unused_recharge(records, history, *, now, threshold=48):
     """Legacy migration only: require recorded cold sample after both last OFF/idle transitions."""
     try:
