@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.11
+
+- Diematic 3: log the existing raw register map once after the first successful core refresh (including 73, 426, 435, 436, 438, 454).
+- Read eight additional candidate words (265, 274, 277, 278, 604, 622, 623, 625) once per app start, interleaved with existing experimental polling AFTER the first experimental round. The same one-per-minute budget and 0.75 s timeout apply, with confirmed reads taking precedence. Raw values, including 65535, are logged without assigning a meaning.
+- Enabled only via the existing advanced-read option; no new controls, no new sensors, no change to existing control or discovery. Existing experimental sensors remain for comparison until the mappings are verified.
+
 ## 1.1.10
 
 - Read-only experimental Delta-table candidates on Diematic 3, enabled with the existing advanced-read option. Six candidates reuse core reads; other candidates are probed singly, no more often than once per minute, only between confirmed advanced reads and within the existing master window.

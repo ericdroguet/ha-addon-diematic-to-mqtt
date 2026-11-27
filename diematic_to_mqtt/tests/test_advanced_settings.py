@@ -63,5 +63,29 @@ class TestAdvancedSettings(unittest.TestCase):
         self.assertEqual(interface.masterReadAnalog.call_count, 2)
         interface.masterWriteAnalog.assert_not_called()
 
+    def test_survey_shares_experimental_slot_and_preserves_raw_marker(self):
+        p = AdvancedProbe()
+        p.enabled = True
+        p.next_read = 1000
+        p.survey_ready = True
+        p.survey_turn = True
+        p.values[678] = (750, 100)
+        interface, logger = Mock(), Mock()
+        interface.masterReadAnalog.side_effect = [{265: 65535}, {264: 3}]
+        with patch("advanced_settings.time.time", return_value=100), patch("advanced_settings.time.monotonic", return_value=100):
+            p.poll(interface, 10, {73: 65535, 426: 40}, logger, 100)
+            self.assertEqual(p.survey_pending[0], 274)
+            self.assertTrue(p.survey_core_logged)
+            self.assertEqual(p.messages(True)["advanced/678"], "75.0")
+            self.assertFalse(p.stopped)
+            logger.info.assert_any_call("Diematic survey register %s raw=%r (no mapping assumed)", 265, 65535)
+            p.poll(interface, 10, {}, logger, 100)
+            self.assertEqual(interface.masterReadAnalog.call_count, 1)
+        with patch("advanced_settings.time.time", return_value=161), patch("advanced_settings.time.monotonic", return_value=161):
+            p.poll(interface, 10, {}, logger, 161)
+            self.assertEqual(p.messages(True)["advanced/264"], "3")
+        self.assertEqual(interface.masterReadAnalog.call_count, 2)
+        interface.masterWriteAnalog.assert_not_called()
+
 if __name__ == "__main__":
     unittest.main()
