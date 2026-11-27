@@ -1,6 +1,6 @@
 import unittest
 from dataclasses import asdict
-from policy import Cycle, Settings, evaluate, restore
+from policy import Cycle, Settings, evaluate, restore, unused_recharge
 
 class PolicyTest(unittest.TestCase):
     def setUp(self):
@@ -56,6 +56,22 @@ class PolicyTest(unittest.TestCase):
         self.arm()
         self.c = restore(asdict(self.c), 100, self.s)
         self.assertFalse(self.run_at(now=100, temp=52).electric)
+
+    def test_overshoot_before_complement(self):
+        self.run_at()
+        self.assertFalse(self.run_at(now=200, temp=51, pump="on").electric)
+        self.assertTrue(self.run_at(now=300, temp=52, pump="off").electric)
+
+    def test_legacy_recharge_proof(self):
+        records = {"switch.chauffe_eau": {"state": "off", "last_changed": "1970-01-01T00:01:00+00:00"},
+                   "timer.ecs_hybride_limite": {"state": "idle", "last_changed": "1970-01-01T00:01:00+00:00"},
+                   "sensor.chauffe_eau_puissance": {"state": "0"}}
+        cold = {"state": "47.9", "last_changed": "1970-01-01T00:02:00+00:00"}
+        hot = {"state": "55", "last_changed": "1970-01-01T00:03:00+00:00"}
+        self.assertTrue(unused_recharge(records, [cold], now=200))
+        self.assertFalse(unused_recharge(records, [cold, hot], now=200))
+        records["timer.ecs_hybride_limite"]["last_changed"] = "1970-01-01T00:02:30+00:00"
+        self.assertFalse(unused_recharge(records, [cold], now=200))
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,6 +1,7 @@
 """Pure, read-only ECS policy. Decisions are proposals, never actuator commands."""
 from dataclasses import dataclass, asdict
 from math import isfinite
+from datetime import datetime
 
 @dataclass(frozen=True)
 class Settings:
@@ -73,6 +74,34 @@ def evaluate(cycle, settings, *, now, temp, color, period, pump, allowed):
             return Proposal("electric", target, True, cycle.reason, settings.electric_max_minutes * 60)
         return Proposal("fuel", target, False, "attente 50 °C et fin pompe ECS")
     return Proposal("locked", target, False, cycle.reason)
+
+def unused_recharge(records, history, *, now, threshold=48):
+    """Legacy migration only: require recorded cold sample after both last OFF/idle transitions."""
+    try:
+        sw, timer = records["switch.chauffe_eau"], records["timer.ecs_hybride_limite"]
+        if sw["state"] != "off" or timer["state"] != "idle":
+            return False
+        if float(records["sensor.chauffe_eau_puissance"]["state"]) != 0:
+            return False
+        def stamp(value):
+            return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+        cutoff = max(stamp(sw["last_changed"]), stamp(timer["last_changed"]), now - 10800)
+        cold = None
+        for item in history:
+            try:
+                value = float(item["state"])
+                when = stamp(item.get("last_changed") or item["last_updated"])
+            except (KeyError, ValueError, TypeError):
+                continue
+            if not cutoff < when <= now:
+                continue
+            if value >= 55:
+                cold = None
+            elif 0 <= value < threshold:
+                cold = when
+        return cold is not None
+    except (KeyError, ValueError, TypeError):
+        return False
 
 def restore(data, now, settings):
     """Corrupt/expired/reversed clock state fails closed."""

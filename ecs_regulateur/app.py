@@ -1,11 +1,12 @@
-"""ECS 0.1.1: gated active control, independent HA cutout."""
+"""ECS 0.1.2: preserve unused fuel-phase recharge through interruptions."""
 import json, logging, os, time, signal
 from dataclasses import asdict
 from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.request import Request, urlopen
+from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
-from policy import Cycle, Settings, evaluate
+from policy import Cycle, Settings, Proposal, evaluate, unused_recharge
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 LOG = logging.getLogger("ecs")
@@ -45,7 +46,10 @@ def call(service, entity, **data):
 
 def fuel(target):
     for entity in (DAY, NIGHT):
-        if float(get(entity)) != target:
+        state = get(entity)
+        if state in ("unknown", "unavailable"):
+            continue
+        if float(state) != target:
             call("number/set_value", entity, value=target)
 
 def cut():
@@ -63,7 +67,7 @@ def lock(cycle, reason):
 def save(cycle, owned):
     p = DATA / "active_cycle.tmp"
     with p.open("w") as f:
-        json.dump({"cycle": asdict(cycle), "owned": owned}, f)
+        json.dump({"schema": 2, "cycle": asdict(cycle), "owned": owned}, f)
         f.flush()
         os.fsync(f.fileno())
     p.replace(DATA / "active_cycle.json")
@@ -89,16 +93,25 @@ def main():
     cycle = Cycle()
     owned = False
     recovery = False
+    pending_recovery = False
+    legacy_recovery = False
     try:
         saved = json.loads((DATA / "active_cycle.json").read_text())
         owned = bool(saved.get("owned"))
         recovery = owned
-        # A restart cannot resume an electrical cycle. Restore fuel and require fresh recharge.
+        prior = saved.get("cycle", {})
+        # No restart of a spent/attempted electrical complement.
+        pending_recovery = prior.get("phase") == "fuel"
+        legacy_recovery = (saved.get("schema") != 2
+                           and prior.get("phase") == "locked"
+                           and prior.get("reason") in ("erreur : complément interrompu", "désactivé ou garde-fou",
+                                                       "redémarrage : ancien complément non repris"))
+        recovery = owned or pending_recovery or legacy_recovery
     except (OSError, ValueError, TypeError):
         pass
     last = None
     last_log = 0
-    LOG.info("ECS 0.1.1 : autorisation HA et parachute obligatoires")
+    LOG.info("ECS 0.1.2 : reprise avant complément, aucun redémarrage électrique")
     try:
         while not STOP:
             now = time.time()
@@ -118,22 +131,50 @@ def main():
                          and official(rec, now) and temp is not None and 0 <= temp <= 95
                          and val(PUMP) in ("on", "off") and val(SW) in ("on", "off")
                          and val(TIMER) in ("idle", "active") and val(COLOR) in ("bleu", "blanc", "rouge"))
-                if recovery:
-                    cut()
-                    fuel(55)
-                    lock(cycle, "redémarrage : ancien complément non repris")
+                inactive = val(SW) == "off" and val(TIMER) == "idle"
+                if recovery and valid:
+                    proven = pending_recovery and inactive
+                    if legacy_recovery and inactive and 48 <= temp < 55:
+                        # A one-time migration of legacy locked state only, not a periodic history query.
+                        try:
+                            start = datetime.fromtimestamp(now-10800, ZoneInfo("UTC")).isoformat()
+                            rows = api("/history/period/" + start + "?" + urlencode({"filter_entity_id": TEMP}))
+                            proven = proven or (isinstance(rows, list) and len(rows) == 1
+                                                and unused_recharge(rec, rows[0], now=now, threshold=settings.rearm_below))
+                        except Exception as exc:
+                            LOG.warning("Migration recharge non prouvée : %s", exc)
+                    if proven and temp < 55:
+                        cycle = Cycle(phase="fuel", reason="reprise avant complément")
+                        LOG.info("Reprise recharge fioul non consommée : %.1f °C", temp)
+                    else:
+                        cut()
+                        fuel(55)
+                        lock(cycle, "redémarrage : ancien complément non repris")
                     recovery = False
+                    pending_recovery = legacy_recovery = False
+                    save(cycle, owned)
                 if not valid:
+                    # If an electrical start was never attempted, retain eligibility.
+                    keep = (cycle.phase == "fuel" and inactive)
                     if owned or (enabled and val(SEASON) == "Hiver - Mixte"):
                         cut()
                         fuel(55)
-                    lock(cycle, "désactivé ou garde-fou")
+                    if keep:
+                        cycle.reason = "recharge suspendue : données indisponibles"
+                    else:
+                        lock(cycle, "désactivé ou garde-fou")
                     owned = False
                 else:
                     owned = True
                     previous = cycle.phase == "electric"
-                    proposal = evaluate(cycle, settings, now=now, temp=temp, color=val(COLOR),
-                                        period=val(PERIOD), pump=val(PUMP), allowed=True)
+                    # Do not start the complement until both real fuel setpoints have caught up.
+                    if (cycle.phase == "fuel" and temp < 55
+                            and (val(COLOR) != "rouge" or val(PERIOD) == "hc")
+                            and (val(DAY) not in ("50", "50.0") or val(NIGHT) not in ("50", "50.0"))):
+                        proposal = Proposal("fuel", 50, False, "attente confirmation consignes fioul 50")
+                    else:
+                        proposal = evaluate(cycle, settings, now=now, temp=temp, color=val(COLOR),
+                                            period=val(PERIOD), pump=val(PUMP), allowed=True)
                     save(cycle, owned)
                     if proposal.electric and previous:
                         # An external cut, expired timer or contradictory fuel target locks the cycle.
@@ -166,7 +207,8 @@ def main():
                         cut()
                         fallback = cycle.phase == "locked" and cycle.reason != "cible électrique atteinte"
                         fuel(55 if fallback else proposal.fuel_target)
-                save(cycle, owned)
+                if not recovery:
+                    save(cycle, owned)
                 event = {"phase": cycle.phase, "reason": cycle.reason, "active": valid,
                          "temp": temp, "color": val(COLOR), "period": val(PERIOD),
                          "pump": val(PUMP), "resistance": val(SW), "day": val(DAY), "night": val(NIGHT),
@@ -178,14 +220,18 @@ def main():
                     last, last_log = key, now
             except Exception as exc:
                 LOG.error("Erreur contrôle : %s", exc)
-                lock(cycle, "erreur : complément interrompu")
+                if cycle.phase == "fuel":
+                    cycle.reason = "recharge suspendue : erreur avant complément"
+                else:
+                    lock(cycle, "erreur : complément interrompu")
                 if owned:
                     try:
                         cut()
                         fuel(55)
                     except Exception as e:
                         LOG.error("Coupure non confirmée : parachute requis : %s", e)
-                save(cycle, owned)
+                if not recovery:
+                    save(cycle, owned)
             time.sleep(interval)
     finally:
         if owned:
@@ -194,7 +240,8 @@ def main():
                 fuel(55)
             except Exception:
                 LOG.exception("Arrêt : coupure non confirmée")
-            save(cycle, owned)
+            if not recovery:
+                save(cycle, owned)
 
 if __name__ == "__main__":
     main()

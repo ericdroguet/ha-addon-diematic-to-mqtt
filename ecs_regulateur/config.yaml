@@ -1,5 +1,5 @@
 name: "Régulation intelligente - ECS"
-version: "0.1.1"
+version: "0.1.2"
 slug: "ecs_regulateur"
 description: "Pilotage hybride ECS fioul/électricité et Tempo"
 url: "https://github.com/ericdroguet/ha-addon-diematic-to-mqtt"

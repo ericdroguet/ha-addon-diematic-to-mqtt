@@ -32,3 +32,7 @@ Tests : python -m unittest -v test_policy (également lors de la construction de
 ## 0.1.1 – pilotage réel
 
 Autorisation explicite input_boolean.ecs_hybride_actif. Minuterie restaurable timer.ecs_hybride_limite et automatisation de coupure seule automation.ecs_hybride_parachute_electrique obligatoires. Coupure 119 min maximum, retour fioul 55 °C sur échec ou désactivation. Pas de reprise électrique après arrêt externe ou redémarrage. Anciennes commandes automatiques et boost manuel 3h désactivés. La sécurité HA n'est pas indépendante d'une panne HA ou Netatmo ; le thermostat matériel reste indispensable. Pas de changement du bouclage.
+
+### 0.1.2
+
+Une recharge fioul n'ayant pas encore demandé de complément peut reprendre après une interruption, même au-dessus de 50 °C et sous 55 °C. Migration unique du verrouillage 0.1.1 uniquement sur preuve de température sous 48 °C postérieure à la dernière transition du contacteur (arrêt) et du minuteur (idle). Attendre les deux consignes réelles à 50 °C et la pompe arrêtée. Aucun redémarrage d'un complément déjà tenté.
