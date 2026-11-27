@@ -390,6 +390,17 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/":
             body = Path(__file__).with_name("dashboard.html").read_bytes()
             content_type = "text/html; charset=utf-8"
+        elif path == "/api/knowledge/session":
+            with KNOWLEDGE_LOCK:
+                body=json.dumps({"writable":KNOWLEDGE is not None,"csrf":CSRF}).encode()
+            content_type = "application/json; charset=utf-8"
+        elif path == "/api/knowledge/entity":
+            from urllib.parse import urlsplit, parse_qs
+            eid=parse_qs(urlsplit(self.path).query).get("id",[""])[0]
+            with KNOWLEDGE_LOCK:
+                body=json.dumps({"entity_id":eid,"observed":eid in CATALOG,
+                    "annotation":(KNOWLEDGE or {}).get("entities",{}).get(eid)},ensure_ascii=False).encode()
+            content_type = "application/json; charset=utf-8"
         elif path == "/api/knowledge/summary":
             with KNOWLEDGE_LOCK:
                 annotations=(KNOWLEDGE or {}).get("entities",{})

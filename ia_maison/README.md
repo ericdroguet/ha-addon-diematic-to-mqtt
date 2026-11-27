@@ -32,3 +32,6 @@ Liste des entités non privées par qualité, recherche, rôle et annotation mod
 
 ## 0.1.3 — Préclassification
 Suggestions déterministes d'après identifiant, domaine, unité et classe de mesure. Distinctes des annotations humaines et des états physiques. Filtre prioritaire pour les cas sans suggestion ; suggestions préremplies, confirmation individuelle facultative. Aucun changement du modèle, des mesures ou des équipements. Endpoint local de synthèse `/api/knowledge/summary`. Pas encore d'analyse du registre des intégrations.
+
+## 0.1.4 — Accès ciblé à la mémoire
+Endpoints Ingress locaux `/api/knowledge/session` et `/api/knowledge/entity?id=...` pour lire le jeton et vérifier une annotation sans transférer le catalogue complet. Les écritures restent protégées par le même jeton CSRF. Aucun changement du modèle ni des permissions.
