@@ -82,5 +82,49 @@ class TestAdvancedSettings(unittest.TestCase):
             interface.masterWriteAnalog.assert_not_called()
         self.assertEqual(set(EXPERIMENTAL_READ), {264, 266, 268, 269, 271, 272, 273})
 
+    def test_band_write_and_readback(self):
+        p = AdvancedProbe()
+        p.enabled = True
+        p.experimental_values[266] = (120, 100)
+        interface, logger = Mock(), Mock()
+        interface.masterReadAnalog.side_effect = [{266: 120}, {266: 140}]
+        interface.masterWriteAnalog.return_value = True
+        with patch("advanced_settings.time.time", return_value=100), patch("advanced_settings.time.monotonic", return_value=100):
+            self.assertTrue(p.can_write_band())
+            p.band_queued_at = 100
+            self.assertTrue(p.write_band(interface, 10, [140], logger, 100))
+            self.assertFalse(p.can_write_band())
+            self.assertEqual(p.messages(True)["advanced/266/availability"], "Offline")
+            p.verify_band(interface, 10, logger)
+            self.assertEqual(p.messages(True)["advanced/266"], "14.0")
+            self.assertTrue(p.can_write_band())
+        interface.masterWriteAnalog.assert_called_once_with(10, 266, [140])
+
+    def test_band_rejects_invalid_or_changed_preflight(self):
+        p = AdvancedProbe()
+        p.enabled = True
+        p.experimental_values[266] = (120, 100)
+        interface, logger = Mock(), Mock()
+        with patch("advanced_settings.time.time", return_value=100), patch("advanced_settings.time.monotonic", return_value=100):
+            p.band_queued_at = 100
+            p.write_band(interface, 10, [170], logger, 100)
+            interface.masterReadAnalog.assert_not_called()
+            p.band_queued_at = 100
+            interface.masterReadAnalog.return_value = {266: 130}
+            p.write_band(interface, 10, [140], logger, 100)
+            self.assertEqual(p.messages(True)["advanced/266"], "13.0")
+        interface.masterWriteAnalog.assert_not_called()
+
+    def test_band_failed_readback_blocks_writes(self):
+        p = AdvancedProbe()
+        p.enabled = True
+        p.expected_band = 140
+        interface, logger = Mock(), Mock()
+        interface.masterReadAnalog.return_value = {266: 120}
+        p.verify_band(interface, 10, logger)
+        self.assertTrue(p.band_write_blocked)
+        self.assertFalse(p.can_write_band())
+        interface.masterWriteAnalog.assert_not_called()
+
 if __name__ == "__main__":
     unittest.main()

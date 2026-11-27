@@ -27,6 +27,8 @@ Autres observations du panneau : NUIT:ABAIS., ECS:CHAUDIERE. Adresses non authen
 ## Politique de commande
 Aucune nouvelle commande en écriture en 1.1.12. Ne pas déduire l'écriture de la lecture. 678 seul conserve la procédure existante de contrôle. Éventuels réglages futurs à valider individuellement (documentation, lecture avant/après, limites constructeur, retour arrière, validation manuelle) ; aucun réglage automatique des paramètres installateur.
 
+Version 1.1.13: essai manuel du seul registre 266 (4–16 K), lecture fraîche avant écriture unique, contrôle après, blocage en cas de valeur non confirmée. Aucun changement automatique. 438 reste en lecture seule et non identifié.
+
 ## Sources
 - https://community.jeedom.com/uploads/short-url/luej1LlG3Wu6xGjpEOxCXbrPCoq.pdf
 - https://community.jeedom.com/uploads/short-url/qjNF6pFIcvSXRka7EFug2vIEKZE.pdf

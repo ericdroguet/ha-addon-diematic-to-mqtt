@@ -175,6 +175,7 @@ def sendDiscoveryMessages():
 				f'advanced/{address}', None, unit, shortAvailabilityTopic=f'advanced/{address}/availability')
 
 		if self_advanced_write_enabled():
+			hassio.addNumber('trial_valve_band_set', "Bande V3V - réglage manuel", 'advanced/266', 'advanced/266/set', 4, 16, 1, "K", shortAvailabilityTopic='advanced/266/availability')
 			hassio.addNumber('boiler_max_temp_set', "Maximum chaudière - réglage", 'advanced/678', 'advanced/678/set', 70, 80, 1, "°C", shortAvailabilityTopic='advanced/678/availability')
 
 	#hot water
@@ -323,6 +324,11 @@ def paramSet(client, userdata, message):
 				panel.request_boiler_max_temp(message.payload)
 			else:
 				logger.warning('Boiler maximum command ignored (retained or unavailable)')
+		elif message.topic == mqttTopicPrefix + '/advanced/266/set':
+			if self_advanced_write_enabled() and not message.retain:
+				panel.request_valve_band(message.payload)
+			else:
+				logger.warning('V3V band command ignored (retained or unavailable)')
 		elif (message.topic[-8:]=='Temp/set'):
 			tempSet(client, userdata, message);
 		elif (message.topic[-8:]=='mode/set'):

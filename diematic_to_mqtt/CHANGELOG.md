@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.13
+
+- Manual V3V band register 266 only, 4–16 K in integer steps; no automatic tuning. Ignore retained commands and stale data. Fresh preflight read, one write, independent readback and fail-block on mismatch. Other installer writes unchanged.
+- Test readback, invalid input, changed preflight, and mismatch in the image build.
+
 ## 1.1.12
 
 - Consolidate Diematic 3 installer settings against the physical panel (CTRL 1422, M2: OUI). Keep legacy object IDs, change discovery labels only. See REGISTER_MAP.md.

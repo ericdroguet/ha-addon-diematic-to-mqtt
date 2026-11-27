@@ -1,5 +1,5 @@
 """Optional Sofrel S500 p.4 probe for Diematic 3.
-Only register 678 can be written by the panel; published values come from reads.
+Only explicitly allowed installer registers 678 and 266 can be written; published values come from reads.
 Reject invalid words and stop additional reads on a failed probe.
 """
 import time
@@ -38,7 +38,7 @@ def validate_block(start, count, reply, core):
     return {a: reply[a] for a in range(start,start+count) if a in SPECS}
 
 # Diematic 3 CTRL 1422: panel values cross-checked on 2026-11-27.
-# Keep legacy MQTT IDs to preserve consumers and history. No new write targets.
+# Keep legacy MQTT IDs to preserve consumers and history.
 EXPERIMENTAL_SETTINGS = (
     (11, "trial_pump_heating_delay", "Tempo pompe chauffage (11)", 0, 15, 1, "min"),
     (60, "trial_ecs_priority", "Priorité ECS (60, code)", 0, 2, 1, None),
@@ -84,6 +84,69 @@ class AdvancedProbe:
         self.experimental_index = 0
         self.experimental_next = 0.0
         self.experimental_failed = set()
+        self.band_queued_at = None
+        self.expected_band = None
+        self.band_write_blocked = False
+
+    def can_write_band(self):
+        item = self.experimental_values.get(266)
+        return (self.enabled and not self.stopped and not self.band_write_blocked
+                and self.expected_band is None and self.band_queued_at is None
+                and 266 not in self.experimental_failed and item is not None
+                and time.monotonic() - item[1] < 900
+                and decode_experimental(266, item[0]) is not None)
+
+    def write_band(self, interface, regulator, data, logger, master_time):
+        queued = self.band_queued_at
+        self.band_queued_at = None
+        if (queued is None or time.monotonic() - queued > 30
+                or not self.can_write_band() or len(data) != 1
+                or type(data[0]) is not int or data[0] not in range(40, 161, 10)
+                or time.time() - master_time > 0.6):
+            logger.warning("Bande V3V: stale or unsafe command rejected")
+            return True
+        old = self.experimental_values[266][0]
+        try:
+            reply = interface.masterReadAnalog(regulator, 266, 1, timeout=0.75)
+            actual = reply.get(266) if isinstance(reply, dict) else None
+        except Exception:
+            actual = None
+        if decode_experimental(266, actual) is None:
+            self.band_write_blocked = True
+            self.experimental_values.pop(266, None)
+            logger.warning("Bande V3V: invalid preflight read; no write")
+            return False
+        self.experimental_values[266] = (actual, time.monotonic())
+        if actual != old or time.time() - master_time > 1.4:
+            logger.warning("Bande V3V: changed readback or insufficient bus window; no write")
+            return True
+        if actual == data[0]:
+            logger.info("Bande V3V already at requested value")
+            return True
+        self.expected_band = data[0]
+        self.experimental_values.pop(266, None)
+        logger.info("Bande V3V: single write %s -> %s", actual, data[0])
+        try:
+            return bool(interface.masterWriteAnalog(regulator, 266, data))
+        except Exception:
+            logger.exception("Bande V3V: write outcome unknown; readback required")
+            return False
+
+    def verify_band(self, interface, regulator, logger):
+        expected = self.expected_band
+        try:
+            reply = interface.masterReadAnalog(regulator, 266, 1, timeout=0.75)
+            actual = reply.get(266) if isinstance(reply, dict) else None
+        except Exception:
+            actual = None
+        self.expected_band = None
+        if decode_experimental(266, actual) is not None:
+            self.experimental_values[266] = (actual, time.monotonic())
+        if actual == expected:
+            logger.info("Bande V3V confirmed by readback: %.1f K", actual / 10)
+        else:
+            self.band_write_blocked = True
+            logger.warning("Bande V3V NOT confirmed: expected %s, actual %s; writes blocked until restart", expected, actual)
 
     def can_write_max(self):
         item = self.values.get(678)
@@ -104,6 +167,10 @@ class AdvancedProbe:
         stamp = time.monotonic()
         for address in EXPERIMENTAL_CORE:
             self.experimental_values[address] = (core.get(address), stamp)
+        if self.expected_band is not None:
+            if time.time() - master_time <= 1.0:
+                self.verify_band(interface, regulator, logger)
+            return
         if stamp < self.next_read:
             self.poll_experimental(interface, regulator, logger, master_time)
             return

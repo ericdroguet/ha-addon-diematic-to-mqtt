@@ -27,6 +27,18 @@ class Diematic3Panel(Diematic):
 		
 		super().__init__(ip,port,regulatorAddress,0,boilerTimezone,syncTime)
 
+	def request_valve_band(self, payload):
+		try:
+			value = float(payload)
+		except (ValueError, TypeError, OverflowError):
+			self.logger.warning('Bande V3V: invalid MQTT payload')
+			return
+		if not 4 <= value <= 16 or not value.is_integer() or not self.availability or not self.advanced_probe.can_write_band():
+			self.logger.warning('Bande V3V: rejected value or unavailable readback')
+			return
+		self.advanced_probe.band_queued_at = time.monotonic()
+		self.regUpdateRequest.put(DDModbus.RegisterSet(266, [int(value * 10)]))
+
 	def request_boiler_max_temp(self, payload):
 		try:
 			value = float(payload)
@@ -277,6 +289,11 @@ class Diematic3Panel(Diematic):
 						while (not(self.regUpdateRequest.empty()) and ((time.time()-self.masterTime) < 2)):
 							regSet=self.regUpdateRequest.get(False)
 							self.logger.debug('Write Request :'+str(regSet.address)+':'+str(regSet.data));
+							if regSet.address == 266:
+								if not self.advanced_probe.write_band(self.modBusInterface, self.regulatorAddress, regSet.data, self.logger, self.masterTime):
+									self.masterSlaveSynchro=False
+								self.refreshRequest=True
+								continue
 							if regSet.address == 678:
 								if not self.advanced_probe.can_write_max() or len(regSet.data) != 1 or regSet.data[0] not in range(700, 801, 10):
 									self.logger.warning('Maximum chaudière: write rejected (invalid or stale register)')
