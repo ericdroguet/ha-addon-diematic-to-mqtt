@@ -11,7 +11,7 @@ class Settings:
     rearm_below: int = 48
 
     def __post_init__(self):
-        if not (self.fuel_target == 50 and 55 <= self.electric_target <= 60
+        if not (self.fuel_target == 50 and self.electric_target == 55
                 and 1 <= self.electric_max_minutes <= 120
                 and 40 <= self.rearm_below < self.fuel_target):
             raise ValueError("Paramètres ECS hors limites")

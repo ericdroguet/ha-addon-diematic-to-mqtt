@@ -1,4 +1,4 @@
-"""ECS 0.1.2: preserve unused fuel-phase recharge through interruptions."""
+"""ECS 0.1.4: bounded Netatmo commands and fail-closed cloud handling."""
 import json, logging, os, time, signal
 from dataclasses import asdict
 from datetime import datetime, timedelta
@@ -15,6 +15,10 @@ DATA = Path("/data")
 ENABLE = "input_boolean.ecs_hybride_actif"
 TIMER = "timer.ecs_hybride_limite"
 GUARD = "automation.ecs_hybride_parachute_electrique"
+CUT_SCRIPT = "script.ecs_netatmo_coupure"
+CUT_PAUSE = "timer.ecs_netatmo_pause_coupure"
+START_PAUSE = 3600
+last_uncertain = False
 SW = "switch.chauffe_eau"
 DAY = "number.hot_water_temp_day"
 NIGHT = "number.hot_water_temp_night"
@@ -53,12 +57,59 @@ def fuel(target):
             call("number/set_value", entity, value=target)
 
 def cut():
-    if get(SW) != "off":
-        call("switch/turn_off", SW)
-    if get(SW) != "off":
-        raise RuntimeError("coupure résistance non confirmée")
-    if get(TIMER) != "idle":
-        call("timer/cancel", TIMER)
+    """Do not send cloud commands for unknown/off states. OFF goes through HA's shared limiter."""
+    global last_uncertain
+    state = get(SW)
+    if state == "off":
+        last_uncertain = False
+        if get(TIMER) != "idle":
+            call("timer/cancel", TIMER)
+        return True
+    if state == "on" and get(CUT_PAUSE) == "idle" and get(CUT_SCRIPT) == "off":
+        call("script/turn_on", CUT_SCRIPT)
+    if not last_uncertain:
+        last_uncertain = True
+        LOG.warning("Coupure non confirmée (%s) : aucun ordre direct Netatmo", state)
+        try:
+            api("/services/persistent_notification/create",
+                {"notification_id": "ecs_netatmo_incertain", "title": "ECS : état électrique non confirmé",
+                 "message": "Vérifier le contacteur dans Home + Control ou localement. Ne pas considérer la coupure garantie."})
+        except Exception:
+            LOG.warning("Notification locale indisponible")
+    return False
+
+def set_start_pause(until):
+    path = DATA / "netatmo_pause.tmp"
+    with path.open("w") as f:
+        json.dump({"until": until}, f)
+        f.flush()
+        os.fsync(f.fileno())
+    path.replace(DATA / "netatmo_pause.json")
+
+def get_start_pause():
+    try:
+        return float(json.loads((DATA / "netatmo_pause.json").read_text())["until"])
+    except FileNotFoundError:
+        return 0
+    except (OSError, ValueError, TypeError, KeyError):
+        return time.time() + START_PAUSE
+
+def confirm_start(timeout=45):
+    """Wait for cached HA feedback, never poll or retry the cloud."""
+    deadline = time.monotonic() + timeout
+    while not STOP and time.monotonic() < deadline:
+        if (get(TIMER) != "active" or get(ENABLE) != "on" or get(GUARD) != "on"
+                or get(PUMP) != "off" or get(BOOST) != "off" or get(FAULT) != "off"
+                or get(CUT_SCRIPT) != "off" or get(CUT_PAUSE) != "idle"
+                or not 48 <= float(get(TEMP)) < 55
+                or get(COLOR) not in ("bleu", "blanc", "rouge")
+                or get(PERIOD) not in ("hp", "hc")
+                or (get(COLOR) == "rouge" and get(PERIOD) == "hp")):
+            return False
+        if get(SW) == "on":
+            return True
+        time.sleep(3)
+    return False
 
 def lock(cycle, reason):
     cycle.phase, cycle.reason = "locked", reason
@@ -95,11 +146,16 @@ def main():
     recovery = False
     pending_recovery = False
     legacy_recovery = False
+    next_start = get_start_pause()
     try:
         saved = json.loads((DATA / "active_cycle.json").read_text())
         owned = bool(saved.get("owned"))
         recovery = owned
         prior = saved.get("cycle", {})
+        # The preceding release did not persist a cloud cooldown.
+        if not (DATA / "netatmo_pause.json").exists() and prior.get("reason") == "erreur : complément interrompu":
+            next_start = time.time() + START_PAUSE
+            set_start_pause(next_start)
         # No restart of a spent/attempted electrical complement.
         pending_recovery = prior.get("phase") == "fuel"
         legacy_recovery = (saved.get("schema") != 2
@@ -111,7 +167,7 @@ def main():
         pass
     last = None
     last_log = 0
-    LOG.info("ECS 0.1.3 : horloge Diematic comme témoin de lecture, reprise avant complément")
+    LOG.info("ECS 0.1.4 : coupure HA temporisée 120 s, pause ON 60 min sur erreur, confirmation locale")
     try:
         while not STOP:
             now = time.time()
@@ -125,7 +181,9 @@ def main():
                          and val(BOOST) == "off" and val(FAULT) == "off"
                          and official(rec, now) and temp is not None and 0 <= temp <= 95
                          and val(PUMP) in ("on", "off") and val(SW) in ("on", "off")
-                         and val(TIMER) in ("idle", "active") and val(COLOR) in ("bleu", "blanc", "rouge"))
+                         and val(TIMER) in ("idle", "active") and val(COLOR) in ("bleu", "blanc", "rouge")
+                         and val(CUT_SCRIPT) in ("on", "off") and val(CUT_PAUSE) in ("active", "idle")
+                         and now >= next_start)
                 inactive = val(SW) == "off" and val(TIMER) == "idle"
                 if recovery and valid:
                     proven = pending_recovery and inactive
@@ -165,7 +223,9 @@ def main():
                     # Do not start the complement until both real fuel setpoints have caught up.
                     if (cycle.phase == "fuel" and temp < 55
                             and (val(COLOR) != "rouge" or val(PERIOD) == "hc")
-                            and (val(DAY) not in ("50", "50.0") or val(NIGHT) not in ("50", "50.0"))):
+                            and (val(DAY) not in ("50", "50.0") or val(NIGHT) not in ("50", "50.0")
+                                 or val(CUT_PAUSE) != "idle" or val(CUT_SCRIPT) != "off"
+                                 or val(SW) != "off" or val(TIMER) != "idle")):
                         proposal = Proposal("fuel", 50, False, "attente confirmation consignes fioul 50")
                     else:
                         proposal = evaluate(cycle, settings, now=now, temp=temp, color=val(COLOR),
@@ -182,7 +242,8 @@ def main():
                         fuel(50)
                         if (float(get(DAY)) == float(get(NIGHT)) == 50 and get(PUMP) == "off"
                                 and get(ENABLE) == get(GUARD) == "on" and get(SW) == "off"
-                                and get(TIMER) == "idle" and get(FAULT) == "off"
+                                and get(TIMER) == "idle" and get(CUT_PAUSE) == "idle"
+                                and get(CUT_SCRIPT) == "off" and get(FAULT) == "off"
                                 and get(BOOST) == "off" and 50 <= float(get(TEMP)) < 55):
                             seconds = min(7140, int(cycle.deadline-time.time())-60)
                             if seconds <= 0:
@@ -190,9 +251,14 @@ def main():
                             call("timer/start", TIMER, duration=seconds)
                             if get(TIMER) != "active" or get(ENABLE) != "on" or get(GUARD) != "on":
                                 raise RuntimeError("parachute non confirmé")
+                            # Persist BEFORE the one permitted ON; errors/timeouts are ambiguous.
+                            next_start = time.time() + START_PAUSE
+                            set_start_pause(next_start)
                             call("switch/turn_on", SW)
-                            if get(SW) != "on":
-                                raise RuntimeError("contacteur non confirmé")
+                            if not confirm_start():
+                                raise RuntimeError("contacteur non confirmé après attente locale")
+                            set_start_pause(0)
+                            next_start = 0
                             LOG.info("Complément électrique démarré, limite %s secondes", seconds)
                         else:
                             cut()
@@ -208,7 +274,8 @@ def main():
                          "temp": temp, "color": val(COLOR), "period": val(PERIOD),
                          "pump": val(PUMP), "resistance": val(SW), "day": val(DAY), "night": val(NIGHT),
                          "power": val("sensor.chauffe_eau_puissance"),
-                         "remaining": max(0, int(cycle.deadline-now)) if cycle.deadline else 0}
+                         "remaining": max(0, int(cycle.deadline-now)) if cycle.deadline else 0,
+                         "netatmo_pause_seconds": max(0, int(next_start-now))}
                 key = (event["phase"], event["reason"], event["active"], event["day"], event["resistance"])
                 if key != last or now-last_log >= 300:
                     LOG.info("%s", json.dumps(event, ensure_ascii=False))
@@ -222,9 +289,12 @@ def main():
                 if owned:
                     try:
                         cut()
-                        fuel(55)
                     except Exception as e:
                         LOG.error("Coupure non confirmée : parachute requis : %s", e)
+                    try:
+                        fuel(55)
+                    except Exception as e:
+                        LOG.error("Secours fioul non confirmé : %s", e)
                 if not recovery:
                     save(cycle, owned)
             time.sleep(interval)
@@ -232,9 +302,12 @@ def main():
         if owned:
             try:
                 cut()
-                fuel(55)
             except Exception:
                 LOG.exception("Arrêt : coupure non confirmée")
+            try:
+                fuel(55)
+            except Exception:
+                LOG.exception("Arrêt : secours fioul non confirmé")
             if not recovery:
                 save(cycle, owned)
 

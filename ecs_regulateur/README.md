@@ -40,3 +40,7 @@ Une recharge fioul n'ayant pas encore demandé de complément peut reprendre apr
 ### 0.1.3
 
 La fraîcheur ECS est vérifiée via l'horloge de la même trame Diematic (120 s max depuis sa publication et heure cohérente), pas via une variation obligatoire de la température. Les valeurs indisponibles restent invalides.
+
+### 0.1.4
+
+Les lectures restent locales. Une seule tentative ON par complément, avec confirmation locale jusqu'à 45 s. Une tentative ON ambiguë ou refusée laisse une pause persistante de 60 min et un cycle verrouillé ; pas de reprise automatique du même complément. Toute coupure passe par script.ecs_netatmo_coupure, partagé avec le parachute HA, qui ne commande que sur état ON connu et démarre timer.ecs_netatmo_pause_coupure (120 s restaurables) avant la commande. Pas de commande pour un état indisponible. Une coupure non confirmée déclenche une notification locale ; le secours fioul est indépendant. Le thermostat matériel demeure indispensable, car aucune commande cloud ne garantit la coupure en cas de panne.
