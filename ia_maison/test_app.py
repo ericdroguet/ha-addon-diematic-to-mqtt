@@ -43,5 +43,37 @@ class TestObservation(unittest.TestCase):
             p.write_text("{")
             self.assertEqual(app.load_model(p),{})
 
+class TestHumanKnowledge(unittest.TestCase):
+    def test_annotations_and_events(self):
+        current={"schema":1,"entities":{},"events":[]}
+        catalog={"sensor.temp":{"quality":"unsupported_state"}}
+        result=app.validate_knowledge({"kind":"entity","entity_id":"sensor.temp","role":"chauffage","note":"Consigne"},catalog,current,"2026-11-27")
+        self.assertEqual(result["entities"]["sensor.temp"]["note"],"Consigne")
+        self.assertEqual(current["entities"],{})
+        result=app.validate_knowledge({"kind":"event","category":"rideaux","note":"Fermés"},catalog,result,"2026-11-27")
+        self.assertEqual(len(result["events"]),1)
+        event_id=result["events"][0]["id"]
+        result=app.validate_knowledge({"kind":"remove_event","id":event_id},catalog,result,"2026-11-27")
+        self.assertEqual(result["events"],[])
+        result=app.validate_knowledge({"kind":"remove","entity_id":"sensor.temp"},catalog,result,"2026-11-27")
+        self.assertEqual(result["entities"],{})
+    def test_reject_invalid(self):
+        current={"schema":1,"entities":{},"events":[]}
+        with self.assertRaises(ValueError):
+            app.validate_knowledge({"kind":"entity","entity_id":"person.test","role":"presence"}, {"person.test":{}},current,"now")
+        with self.assertRaises(ValueError):
+            app.validate_knowledge({"kind":"event","category":"rideaux","note":" "},{},current,"now")
+        with self.assertRaises(ValueError):
+            app.validate_knowledge({"kind":"entity","entity_id":"sensor.test","role":"bad"},{"sensor.test":{}},current,"now")
+    def test_persistence_and_corruption(self):
+        with tempfile.TemporaryDirectory() as d:
+            p=Path(d)/"human_knowledge.json"
+            self.assertEqual(app.load_knowledge(p),{"schema":1,"entities":{},"events":[]})
+            app.atomic_json(p,{"schema":1,"entities":{"sensor.temp":{"role":"chauffage","note":"Consigne"}},"events":[]})
+            self.assertEqual(app.load_knowledge(p)["entities"]["sensor.temp"]["role"],"chauffage")
+            p.write_text("{")
+            self.assertIsNone(app.load_knowledge(p))
+            self.assertEqual(p.read_text(),"{")
+
 if __name__=="__main__":
     unittest.main()

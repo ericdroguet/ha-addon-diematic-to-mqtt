@@ -26,3 +26,6 @@ sans sauvegarde de /data si l'on souhaite garder les données.
 
 ## 0.1.1 — Supervision visuelle
 Interface HTML locale responsive via Ingress, actualisée toutes les 15 s depuis le statut local. Affiche qualité des états, archives, nombre de prédictions évaluées et erreurs par pièce, avec référence de persistance. Aucun changement du modèle ni des permissions. Compteurs de collecte et d'interruptions par session.
+
+## 0.1.2 — Mémoire humaine
+Liste des entités non privées par qualité, recherche, rôle et annotation modifiables, journal horodaté des événements manuels. Les notes sont persistées atomiquement dans `/data/observation/human_knowledge.json`, séparées des mesures et du modèle. Écriture locale via Ingress avec jeton CSRF par démarrage ; aucune commande HA. Fichier corrompu conservé et écriture bloquée. Les annotations n'altèrent ni la qualité des capteurs ni les modèles actuels ; elles préparent l'enrichissement futur. Ne pas saisir de secrets. Les 100 derniers événements sont affichés ; 10 000 maximum conservés, suppression individuelle possible. Les entités de présence privées ne figurent pas dans le catalogue.

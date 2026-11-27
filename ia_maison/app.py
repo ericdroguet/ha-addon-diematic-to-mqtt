@@ -269,12 +269,92 @@ def update_status(**kwargs):
     with LOCK:
         STATUS.update(kwargs)
 
+
+# Human annotations are descriptive only; never execute notes or replace raw states.
+KNOWLEDGE_LOCK = threading.Lock()
+KNOWLEDGE = {"schema":1,"entities":{},"events":[]}
+CATALOG = {}
+CSRF = uuid.uuid4().hex + uuid.uuid4().hex
+ROLES = {"chauffage","ecs","energie","meteo","hydraulique","presence","ouvrants",
+         "piscine","recharge","climatisation","reseau","autre","ignore","incertain"}
+EVENT_TYPES = {"rideaux","invites","cheminee","reglage","capteur","autre"}
+
+def validate_knowledge(payload, catalog, current, now):
+    if not isinstance(payload,dict):
+        raise ValueError("Objet JSON attendu")
+    result = {"schema":1,"entities":dict(current["entities"]),"events":list(current["events"])}
+    kind = payload.get("kind")
+    if kind == "entity":
+        eid, role, note = payload.get("entity_id"), payload.get("role"), payload.get("note","")
+        if not isinstance(eid,str) or eid not in catalog or eid.split(".",1)[0] in PRIVATE:
+            raise ValueError("Entité inconnue ou privée")
+        if not isinstance(role,str) or role not in ROLES or not isinstance(note,str) or len(note)>1000:
+            raise ValueError("Rôle ou note invalide")
+        if len(result["entities"])>=3000 and eid not in result["entities"]:
+            raise ValueError("Limite des annotations atteinte")
+        result["entities"][eid]={"role":role,"note":note.strip(),"updated_at":now}
+    elif kind == "event":
+        category,note = payload.get("category"),payload.get("note")
+        if not isinstance(category,str) or category not in EVENT_TYPES or not isinstance(note,str) or not note.strip() or len(note)>1000:
+            raise ValueError("Catégorie ou description invalide")
+        if len(result["events"])>=10000:
+            raise ValueError("Limite du journal atteinte")
+        result["events"].append({"id":uuid.uuid4().hex,"category":category,"note":note.strip(),"at":now})
+    elif kind == "remove":
+        eid=payload.get("entity_id")
+        if not isinstance(eid,str) or eid not in result["entities"]:
+            raise ValueError("Annotation inexistante")
+        del result["entities"][eid]
+    elif kind == "remove_event":
+        event_id=payload.get("id")
+        if not isinstance(event_id,str) or not any(e.get("id")==event_id for e in result["events"]):
+            raise ValueError("Événement inexistant")
+        result["events"]=[e for e in result["events"] if e.get("id")!=event_id]
+    else:
+        raise ValueError("Action inconnue")
+    return result
+
+def load_knowledge(path):
+    try:
+        data=json.loads(path.read_text())
+        if (data.get("schema")!=1 or not isinstance(data.get("entities"),dict)
+            or not isinstance(data.get("events"),list)
+            or len(data["entities"])>3000 or len(data["events"])>10000
+            or not all(isinstance(v,dict) and isinstance(v.get("role"),str)
+                       and v["role"] in ROLES and isinstance(v.get("note"),str)
+                       for v in data["entities"].values())
+            or not all(isinstance(v,dict) and isinstance(v.get("note"),str)
+                       and isinstance(v.get("id"),str) for v in data["events"])):
+            raise ValueError("schema")
+        return data
+    except FileNotFoundError:
+        return {"schema":1,"entities":{},"events":[]}
+    except Exception:
+        LOG.warning("Mémoire humaine illisible; écriture bloquée pour préserver le fichier")
+        return None
+
+def make_catalog(rows):
+    # Never retain arbitrary raw strings, GPS, attributes or secret text.
+    return {eid:{"quality":r["q"],"state":r["s"],"age":r["age"],
+                 "unit":r["a"].get("unit_of_measurement")}
+            for eid,r in rows.items() if eid.split(".",1)[0] not in PRIVATE}
+
+def knowledge_view():
+    with KNOWLEDGE_LOCK:
+        current=KNOWLEDGE or {"entities":{},"events":[]}
+        return {"writable":KNOWLEDGE is not None,"csrf":CSRF,
+                "catalog":CATALOG,"annotations":current["entities"],
+                "events":current["events"][-100:],"event_count":len(current["events"])}
+
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         path = self.path.split("?")[0]
         if path == "/":
             body = Path(__file__).with_name("dashboard.html").read_bytes()
             content_type = "text/html; charset=utf-8"
+        elif path == "/api/knowledge":
+            body = json.dumps(knowledge_view(),ensure_ascii=False,allow_nan=False).encode()
+            content_type = "application/json; charset=utf-8"
         elif path in ("/health", "/api/status"):
             with LOCK:
                 body = json.dumps(STATUS, ensure_ascii=False, allow_nan=False, indent=2).encode()
@@ -290,16 +370,57 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def do_POST(self):
+        global KNOWLEDGE
+        if self.path.split("?")[0] != "/api/knowledge":
+            self.send_error(404)
+            return
+        # Custom per-boot CSRF token; no CORS, no external access or service calls.
+        import hmac
+        if not hmac.compare_digest(self.headers.get("X-IA-CSRF",""),CSRF):
+            self.send_error(403)
+            return
+        if self.headers.get("Content-Type","").split(";")[0].strip()!="application/json":
+            self.send_error(415)
+            return
+        try:
+            size=int(self.headers.get("Content-Length","0"))
+            if not 0<size<=8192:
+                raise ValueError("Taille invalide")
+            self.connection.settimeout(5)
+            payload=json.loads(self.rfile.read(size))
+            with KNOWLEDGE_LOCK:
+                if KNOWLEDGE is None:
+                    raise OSError("Mémoire en lecture seule")
+                next_data=validate_knowledge(payload,CATALOG,KNOWLEDGE,
+                            dt.datetime.now(dt.timezone.utc).isoformat())
+                atomic_json(DATA/"human_knowledge.json",next_data)
+                KNOWLEDGE=next_data
+            status,response=200,{"saved":True}
+        except (ValueError,TypeError,UnicodeError) as exc:
+            status,response=400,{"error":str(exc)[:200]}
+        except Exception:
+            status,response=503,{"error":"Mémoire non enregistrée; vérifier le journal"}
+        body=json.dumps(response,ensure_ascii=False).encode()
+        self.send_response(status)
+        self.send_header("Content-Type","application/json; charset=utf-8")
+        self.send_header("Cache-Control","no-store")
+        self.send_header("Content-Length",str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def log_message(self, *args):
         pass
 
 def main():
+    global KNOWLEDGE,CATALOG
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     options = json.loads(Path("/data/options.json").read_text())
     interval = max(60, min(300, int(options.get("poll_seconds",60))))
     days = max(30,min(365,int(options.get("retention_days",365))))
     max_bytes = max(1,min(8,int(options.get("max_storage_gib",5))))*1024**3
     DATA.mkdir(parents=True, exist_ok=True)
+    KNOWLEDGE = load_knowledge(DATA/"human_knowledge.json")
     model_path = DATA/"model.json"
     model = Learner(load_model(model_path))
     server = ThreadingHTTPServer(("0.0.0.0",8099), Handler)
@@ -321,6 +442,8 @@ def main():
             if now-last_prune >= 3600:
                 prune(DATA,days,max_bytes,now)
                 last_prune=now
+            with KNOWLEDGE_LOCK:
+                CATALOG=make_catalog(rows)
             size=archive(DATA,{"schema":1,"ts":now,"boot":BOOT,"entities":rows},now)
             consecutive += 1
             total_cycles += 1
