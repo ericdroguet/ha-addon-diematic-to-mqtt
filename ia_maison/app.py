@@ -271,13 +271,20 @@ def update_status(**kwargs):
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
-        if self.path.split("?")[0] not in ("/", "/health", "/api/status"):
+        path = self.path.split("?")[0]
+        if path == "/":
+            body = Path(__file__).with_name("dashboard.html").read_bytes()
+            content_type = "text/html; charset=utf-8"
+        elif path in ("/health", "/api/status"):
+            with LOCK:
+                body = json.dumps(STATUS, ensure_ascii=False, allow_nan=False, indent=2).encode()
+            content_type = "application/json; charset=utf-8"
+        else:
             self.send_error(404)
             return
-        with LOCK:
-            body = json.dumps(STATUS, ensure_ascii=False, allow_nan=False, indent=2).encode()
         self.send_response(200)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Type", content_type)
+        self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
@@ -301,6 +308,8 @@ def main():
     last_prune = 0
     last_save = 0
     consecutive = 0
+    total_cycles = 0
+    failures = 0
     while True:
         start = time.monotonic()
         now = time.time()
@@ -314,6 +323,7 @@ def main():
                 last_prune=now
             size=archive(DATA,{"schema":1,"ts":now,"boot":BOOT,"entities":rows},now)
             consecutive += 1
+            total_cycles += 1
             preds = model.observe(now,rows) if consecutive>=3 else {}
             if now-last_save>=300:
                 atomic_json(model_path,{"schema":1,"rooms":model.rooms})
@@ -323,16 +333,22 @@ def main():
                 q[r["q"]]=q.get(r["q"],0)+1
             update_status(phase="observation", last_snapshot=dt.datetime.fromtimestamp(now,dt.timezone.utc).isoformat(),
                           entities=len(rows), quality=q, room_predictions=preds, snapshot_bytes=size,
-                          boot=BOOT, consecutive=consecutive, last_error=None)
+                          boot=BOOT, consecutive=consecutive, last_error=None,
+                          session_samples=total_cycles, session_failures=failures,
+                          storage_bytes=sum(p.stat().st_size for p in DATA.glob("obs-*.jsonl.gz")),
+                          storage_limit_bytes=max_bytes, retention_days=days, poll_seconds=interval,
+                          learned_samples=sum(m["n"] for m in model.rooms.values()),
+                          learned_rooms=sum(m["n"]>0 for m in model.rooms.values()))
             if consecutive<=3 or consecutive%10==0:
                 LOG.info("Collecte: %s entites, qualite=%s, modeles=%s, archive=%s octets",
                          len(rows),q,len(preds),size)
         except Exception as exc:
             consecutive=0
+            failures += 1
             model.reset_pending()
             model.last=None
             update_status(phase="degrade", room_predictions={}, consecutive=0,
-                          last_error=type(exc).__name__)
+                          last_error=type(exc).__name__, session_failures=failures)
             LOG.warning("Observation interrompue: %s",type(exc).__name__)
         time.sleep(max(interval-(time.monotonic()-start),10))
 

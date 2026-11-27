@@ -23,3 +23,6 @@ Pas encore de modèle causal, MPC, prévisions météo intégrées ni optimisati
 Écran ingress / et /api/status en JSON (état, qualité, prévisions, erreurs).
 Stopper l'application suffit pour suspendre la collecte. Ne pas désinstaller
 sans sauvegarde de /data si l'on souhaite garder les données.
+
+## 0.1.1 — Supervision visuelle
+Interface HTML locale responsive via Ingress, actualisée toutes les 15 s depuis le statut local. Affiche qualité des états, archives, nombre de prédictions évaluées et erreurs par pièce, avec référence de persistance. Aucun changement du modèle ni des permissions. Compteurs de collecte et d'interruptions par session.
