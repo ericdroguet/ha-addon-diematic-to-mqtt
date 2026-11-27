@@ -8,7 +8,7 @@ import DDModbus,Diematic3Panel,Diematic4Panel,DiematicDeltaPanel,Hassio
 import paho.mqtt.client as mqtt
 import json
 from diagnostics import OUTPUTS, diagnostic_messages, raw_snapshot
-from advanced_settings import SETTINGS
+from advanced_settings import SETTINGS, EXPERIMENTAL_SETTINGS
 import time,datetime
 
 
@@ -170,7 +170,7 @@ def sendDiscoveryMessages():
 				enabled_by_default=True, shortAvailabilityTopic=f'diagnostic/{address}/availability')
 
 	if regulatorType == 'Diematic3':
-		for address, object_id, label, _, _, _, unit in SETTINGS:
+		for address, object_id, label, _, _, _, unit in SETTINGS + EXPERIMENTAL_SETTINGS:
 			hassio.addSensor(object_id, label, 'temperature' if unit == '°C' else None,
 				f'advanced/{address}', None, unit, shortAvailabilityTopic=f'advanced/{address}/availability')
 
@@ -237,7 +237,7 @@ def on_connect(client, userdata, flags, reason_code, properties=None):
 	if regulatorType == 'Diematic3':
 		for address in (427, 428):
 			client.publish(f'{mqttTopicPrefix}/diagnostic/{address}/availability', OFFLINE, 1, True)
-		for address, *_ in SETTINGS:
+		for address, *_ in SETTINGS + EXPERIMENTAL_SETTINGS:
 			client.publish(f'{mqttTopicPrefix}/advanced/{address}/availability', OFFLINE, 1, True)
 	client.publish(mqttTopicPrefix + '/raw/registers', '', 1, True)
 	# Annonce les entites au demarrage, meme sans message de naissance HA.

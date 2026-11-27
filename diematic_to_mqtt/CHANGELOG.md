@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.10
+
+- Read-only experimental Delta-table candidates on Diematic 3, enabled with the existing advanced-read option. Six candidates reuse core reads; other candidates are probed singly, no more often than once per minute, only between confirmed advanced reads and within the existing master window.
+- Candidate meanings are unverified until compared with the physical installer menu; invalid/missing values are unavailable, and failed extra addresses are skipped until restart. The confirmed registers and existing write to 678 are unchanged.
+- No new commands or automatic tuning. Delta table: https://community.jeedom.com/uploads/short-url/luej1LlG3Wu6xGjpEOxCXbrPCoq.pdf (pages 1, 4, 6).
+
 ## 1.1.8
 
 - Optional `diematic3_advanced_read` (default false): read-only probe for calculated boiler demand (620), C room influence/slope/min/max (668–671), boiler min/max (677–678). Sofrel S500 p.4. No writes or change to existing controls.

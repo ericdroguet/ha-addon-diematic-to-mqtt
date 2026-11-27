@@ -37,6 +37,38 @@ def validate_block(start, count, reply, core):
         return None
     return {a: reply[a] for a in range(start,start+count) if a in SPECS}
 
+# Historical Delta table: candidate mappings only, NOT validated on Diematic 3.
+# Prefix IDs and names to keep these separate from confirmed settings.
+EXPERIMENTAL_SETTINGS = (
+    (11, "trial_pump_heating_delay", "Essai - Tempo pompe chauffage (11)", 0, 15, 1, "min"),
+    (60, "trial_ecs_priority", "Essai - Priorité ECS (60, code)", 0, 2, 1, None),
+    (61, "trial_ecs_pump_delay", "Essai - Tempo pompe ECS (61)", 0, 15, 1, "min"),
+    (72, "trial_differential_a", "Essai - Différentiel A (72)", 40, 100, 10, "K"),
+    (73, "trial_differential_b", "Essai - Différentiel B (73)", 40, 100, 10, "K"),
+    (264, "trial_building_inertia", "Essai - Inertie bâtiment (264)", 0, 10, 1, None),
+    (266, "trial_valve_band", "Essai - Bande V3V (266)", 40, 160, 10, "K"),
+    (267, "trial_boiler_valve_offset", "Essai - Décalage chaudière V3V (267)", 0, 160, 10, "K"),
+    (268, "trial_antilegionella", "Essai - Antilégionelles (268, code)", 0, 1, 1, None),
+    (269, "trial_burner_min_run", "Essai - Marche mini brûleur (269)", 0, 4, 1, "min"),
+    (271, "trial_burner_delay", "Essai - Tempo brûleur (271)", 0, 10, 1, "min"),
+    (272, "trial_boiler_pump_delay", "Essai - Tempo pompe chaudière (272)", 1, 30, 1, "min"),
+    (273, "trial_boiler_unload", "Essai - Délestage chaudière (273, code)", 0, 1, 1, None),
+    (306, "trial_vario_306_raw", "Essai - VARIO (306, brut)", 0, 65534, 1, None),
+    (438, "trial_boiler_band", "Essai - Bande chaudière (438)", 100, 300, 10, "K"),
+)
+EXPERIMENTAL_CORE = (11, 60, 61, 72, 73, 438)
+EXPERIMENTAL_READ = tuple(s[0] for s in EXPERIMENTAL_SETTINGS if s[0] not in EXPERIMENTAL_CORE)
+EXPERIMENTAL_SPECS = {s[0]: s for s in EXPERIMENTAL_SETTINGS}
+
+def decode_experimental(address, word):
+    _, _, _, lo, hi, divisor, _ = EXPERIMENTAL_SPECS[address]
+    if type(word) is not int or not lo <= word <= hi:
+        return None
+    # Delta table lists a whole-K step for these candidates.
+    if address in (72, 73, 266, 267, 438) and word % 10:
+        return None
+    return str(word) if divisor == 1 else f"{word / divisor:.1f}"
+
 class AdvancedProbe:
     def __init__(self):
         self.enabled = False
@@ -45,6 +77,10 @@ class AdvancedProbe:
         self.next_read = 0.0
         self.values = {}
         self.expected_max = None
+        self.experimental_values = {}
+        self.experimental_index = 0
+        self.experimental_next = 0.0
+        self.experimental_failed = set()
 
     def can_write_max(self):
         item = self.values.get(678)
@@ -59,7 +95,14 @@ class AdvancedProbe:
         self.next_read = 0.0
 
     def poll(self, interface, regulator, core, logger, master_time):
-        if not self.enabled or self.stopped or time.monotonic() < self.next_read:
+        if not self.enabled or self.stopped:
+            return
+        # These six words are already part of every successful core refresh.
+        stamp = time.monotonic()
+        for address in EXPERIMENTAL_CORE:
+            self.experimental_values[address] = (core.get(address), stamp)
+        if stamp < self.next_read:
+            self.poll_experimental(interface, regulator, logger, master_time)
             return
         # Keep the original poll and writes first; skip busy master windows.
         if time.time() - master_time > 1.0:
@@ -88,12 +131,47 @@ class AdvancedProbe:
             self.expected_max = None
         self.index = (self.index + 1) % len(BLOCKS)
 
+    def poll_experimental(self, interface, regulator, logger, master_time):
+        # Never compete with a confirmed advanced read or exceed the master window.
+        now = time.monotonic()
+        if now < self.experimental_next or time.time() - master_time > 1.0:
+            return
+        for _ in EXPERIMENTAL_READ:
+            address = EXPERIMENTAL_READ[self.experimental_index]
+            self.experimental_index = (self.experimental_index + 1) % len(EXPERIMENTAL_READ)
+            if address not in self.experimental_failed:
+                break
+        else:
+            return
+        self.experimental_next = now + 60
+        try:
+            reply = interface.masterReadAnalog(regulator, address, 1, timeout=0.75)
+            word = reply.get(address) if isinstance(reply, dict) else None
+        except Exception:
+            logger.exception("Experimental Modbus read failed (register %s)", address)
+            word = None
+        if decode_experimental(address, word) is None:
+            self.experimental_values.pop(address, None)
+            self.experimental_failed.add(address)
+            logger.warning("Experimental register %s unavailable (raw=%r); skipping until restart", address, word)
+            return
+        self.experimental_values[address] = (word, time.monotonic())
+        logger.info("Experimental register %s: raw=%s, candidate=%s (unverified mapping)",
+                    address, word, decode_experimental(address, word))
+
     def messages(self, online):
         now = time.monotonic()
         result = {}
         for address, _, _, _, _, _, _ in SETTINGS:
             item = self.values.get(address)
             v = decode(address, item[0]) if self.enabled and online and not self.stopped and item and now-item[1] < 150 else None
+            root = f"advanced/{address}"
+            result[root] = v or ""
+            result[root+"/availability"] = "Online" if v is not None else "Offline"
+        for address, *_ in EXPERIMENTAL_SETTINGS:
+            item = self.experimental_values.get(address)
+            ttl = 150 if address in EXPERIMENTAL_CORE else 1800
+            v = decode_experimental(address, item[0]) if self.enabled and online and not self.stopped and item and now-item[1] < ttl else None
             root = f"advanced/{address}"
             result[root] = v or ""
             result[root+"/availability"] = "Online" if v is not None else "Offline"
