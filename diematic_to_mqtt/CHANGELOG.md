@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.1.12
+
+- Consolidate Diematic 3 installer settings against the physical panel (CTRL 1422, M2: OUI). Keep legacy object IDs, change discovery labels only. See REGISTER_MAP.md.
+- Read 426 (offset readback) and 435 (unidentified diagnostic word) from existing core reads. Keep 438 at historical scaling and label as unverified, not boiler bandwidth. 72 remains unverified.
+- Retire 73, 267, 306: no further reads/discovery, invalidate retained availability on reconnect. No automatic deletion of entity registry/history; remove obsolete HA entries separately if desired.
+- Stop the raw exploration; retain only seven additional installer reads at the existing one-per-minute maximum. No new writable addresses or commands; 678 stays unchanged.
+
 ## 1.1.11
 
 - Diematic 3: log the existing raw register map once after the first successful core refresh (including 73, 426, 435, 436, 438, 454).

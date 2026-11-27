@@ -4,7 +4,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))
-from advanced_settings import AdvancedProbe, decode, validate_block, decode_experimental
+from advanced_settings import AdvancedProbe, decode, validate_block, decode_experimental, EXPERIMENTAL_READ, RETIRED_SETTINGS
 
 class TestAdvancedSettings(unittest.TestCase):
     def test_scaling_and_bounds(self):
@@ -63,29 +63,24 @@ class TestAdvancedSettings(unittest.TestCase):
         self.assertEqual(interface.masterReadAnalog.call_count, 2)
         interface.masterWriteAnalog.assert_not_called()
 
-    def test_survey_shares_experimental_slot_and_preserves_raw_marker(self):
+    def test_consolidated_core_and_retired(self):
         p = AdvancedProbe()
         p.enabled = True
         p.next_read = 1000
-        p.survey_ready = True
-        p.survey_turn = True
-        p.values[678] = (750, 100)
+        p.experimental_next = 1000
         interface, logger = Mock(), Mock()
-        interface.masterReadAnalog.side_effect = [{265: 65535}, {264: 3}]
         with patch("advanced_settings.time.time", return_value=100), patch("advanced_settings.time.monotonic", return_value=100):
-            p.poll(interface, 10, {73: 65535, 426: 40}, logger, 100)
-            self.assertEqual(p.survey_pending[0], 274)
-            self.assertTrue(p.survey_core_logged)
-            self.assertEqual(p.messages(True)["advanced/678"], "75.0")
-            self.assertFalse(p.stopped)
-            logger.info.assert_any_call("Diematic survey register %s raw=%r (no mapping assumed)", 265, 65535)
-            p.poll(interface, 10, {}, logger, 100)
-            self.assertEqual(interface.masterReadAnalog.call_count, 1)
-        with patch("advanced_settings.time.time", return_value=161), patch("advanced_settings.time.monotonic", return_value=161):
-            p.poll(interface, 10, {}, logger, 161)
-            self.assertEqual(p.messages(True)["advanced/264"], "3")
-        self.assertEqual(interface.masterReadAnalog.call_count, 2)
-        interface.masterWriteAnalog.assert_not_called()
+            p.poll(interface, 10, {426: 40, 435: 0, 438: 120}, logger, 100)
+            msg = p.messages(True)
+            self.assertEqual(msg["advanced/426"], "4.0")
+            self.assertEqual(msg["advanced/435"], "0")
+            self.assertEqual(msg["advanced/438"], "12.0")
+            for address, _ in RETIRED_SETTINGS:
+                self.assertNotIn(f"advanced/{address}", msg)
+                self.assertNotIn(address, EXPERIMENTAL_READ)
+            interface.masterReadAnalog.assert_not_called()
+            interface.masterWriteAnalog.assert_not_called()
+        self.assertEqual(set(EXPERIMENTAL_READ), {264, 266, 268, 269, 271, 272, 273})
 
 if __name__ == "__main__":
     unittest.main()
