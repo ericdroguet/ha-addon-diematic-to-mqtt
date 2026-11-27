@@ -28,3 +28,7 @@ Les propositions ne sont PAS appliquées. Le fioul actuel peut encore être à 5
 Avant tout pilotage : auditer les automatisations existantes, vérifier les seuils de reprise et la priorité ECS, le thermostat physique, la température de retour du bouclage, le volume et la sécurité sanitaire ; valider une stratégie de rattrapage en cas de timeout. Prévoir un mécanisme indépendant de coupure de la résistance en cas de perte HA ou arrêt du programme. Ne pas se contenter d'une minuterie Python comme sécurité physique. Prévoir une procédure de retour au fonctionnement fioul normal. Ne jamais modifier la sécurité constructeur. Le contrôleur actif fera l'objet d'une version distincte et d'une autorisation explicite.
 
 Tests : python -m unittest -v test_policy (également lors de la construction de l'image).
+
+## 0.1.1 – pilotage réel
+
+Autorisation explicite input_boolean.ecs_hybride_actif. Minuterie restaurable timer.ecs_hybride_limite et automatisation de coupure seule automation.ecs_hybride_parachute_electrique obligatoires. Coupure 119 min maximum, retour fioul 55 °C sur échec ou désactivation. Pas de reprise électrique après arrêt externe ou redémarrage. Anciennes commandes automatiques et boost manuel 3h désactivés. La sécurité HA n'est pas indépendante d'une panne HA ou Netatmo ; le thermostat matériel reste indispensable. Pas de changement du bouclage.

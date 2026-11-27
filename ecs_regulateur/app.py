@@ -1,103 +1,200 @@
-"""ECS V0.1: read-only observation. There is deliberately no HA write API."""
-import json
-import logging
-import os
-import time
+"""ECS 0.1.1: gated active control, independent HA cutout."""
+import json, logging, os, time, signal
 from dataclasses import asdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.request import Request, urlopen
-from policy import Cycle, Settings, evaluate, restore
+from zoneinfo import ZoneInfo
+from policy import Cycle, Settings, evaluate
 
-LOG = logging.getLogger("ecs")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+LOG = logging.getLogger("ecs")
 BASE = "http://supervisor/core/api"
 DATA = Path("/data")
-ENTITIES = {
-    "temp": "sensor.hot_water_temp",
-    "pump": "binary_sensor.hot_water_pump",
-    "color": "sensor.calendrier_tempo_couleur_actuelle",
-    "period": "sensor.calendrier_tempo_periode",
-    "price": "sensor.calendrier_tempo_prix_kwh_actuel",
-    "resistance": "switch.chauffe_eau",
-    "automatic": "input_boolean.ecs_automatique",
-    "season": "input_select.saison_ecs",
-    "boost": "input_boolean.boost_ecs",
-    "fault": "input_boolean.ecs_chauffe_inefficace",
-    "day": "number.hot_water_temp_day",
-    "night": "number.hot_water_temp_night",
-}
-def get_states():
-    req = Request(BASE + "/states", headers={
-        "Authorization": "Bearer " + os.environ["SUPERVISOR_TOKEN"]}, method="GET")
-    with urlopen(req, timeout=10) as resp:
-        return {row["entity_id"]: row for row in json.load(resp)}
+ENABLE = "input_boolean.ecs_hybride_actif"
+TIMER = "timer.ecs_hybride_limite"
+GUARD = "automation.ecs_hybride_parachute_electrique"
+SW = "switch.chauffe_eau"
+DAY = "number.hot_water_temp_day"
+NIGHT = "number.hot_water_temp_night"
+TEMP = "sensor.hot_water_temp"
+PUMP = "binary_sensor.hot_water_pump"
+COLOR = "sensor.calendrier_tempo_couleur_actuelle"
+PERIOD = "sensor.calendrier_tempo_periode"
+AUTO = "input_boolean.ecs_automatique"
+SEASON = "input_select.saison_ecs"
+BOOST = "input_boolean.boost_ecs"
+FAULT = "input_boolean.ecs_chauffe_inefficace"
+OLD = ("automation.ecs_consigne_fioul_tempo",
+       "automation.ecs_resistance_selon_tempo_et_temperature",
+       "automation.ecs_boost_manuel_resistance_3_heures")
+STOP = False
 
-def number(value):
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
+def api(path, payload=None):
+    req = Request(BASE + path, data=json.dumps(payload).encode() if payload is not None else None,
+                  headers={"Authorization": "Bearer " + os.environ["SUPERVISOR_TOKEN"],
+                           "Content-Type": "application/json"})
+    with urlopen(req, timeout=8) as resp:
+        return json.load(resp)
 
-def persist(cycle):
-    tmp = DATA / "cycle.tmp"
-    with tmp.open("w", encoding="utf-8") as f:
-        json.dump(asdict(cycle), f)
+def get(entity):
+    return api("/states/" + entity)["state"]
+
+def call(service, entity, **data):
+    return api("/services/" + service, {"entity_id": entity, **data})
+
+def fuel(target):
+    for entity in (DAY, NIGHT):
+        if float(get(entity)) != target:
+            call("number/set_value", entity, value=target)
+
+def cut():
+    if get(SW) != "off":
+        call("switch/turn_off", SW)
+    if get(SW) != "off":
+        raise RuntimeError("coupure résistance non confirmée")
+    if get(TIMER) != "idle":
+        call("timer/cancel", TIMER)
+
+def lock(cycle, reason):
+    cycle.phase, cycle.reason = "locked", reason
+    cycle.started = cycle.deadline = None
+
+def save(cycle, owned):
+    p = DATA / "active_cycle.tmp"
+    with p.open("w") as f:
+        json.dump({"cycle": asdict(cycle), "owned": owned}, f)
         f.flush()
         os.fsync(f.fileno())
-    tmp.replace(DATA / "cycle.json")
+    p.replace(DATA / "active_cycle.json")
 
-def log_event(event):
-    # Keep bounded local diagnostics, not simulated energy billed as actual.
-    path = DATA / "events.jsonl"
-    if path.exists() and path.stat().st_size > 2_000_000:
-        path.replace(DATA / "events.previous.jsonl")
-    with path.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(event, ensure_ascii=False) + "\n")
+def stop(sig, frame):
+    global STOP
+    STOP = True
+
+def official(records, now):
+    local = datetime.fromtimestamp(now, ZoneInfo("Europe/Paris"))
+    date = (local.date() - timedelta(days=1) if local.hour < 6 else local.date()).isoformat()
+    attrs = records.get(COLOR, {}).get("attributes", {})
+    return (attrs.get("officielle") is True and attrs.get("date") == date
+            and records.get(PERIOD, {}).get("state") == ("hc" if local.hour >= 22 or local.hour < 6 else "hp"))
 
 def main():
+    global STOP
+    signal.signal(signal.SIGTERM, stop)
+    signal.signal(signal.SIGINT, stop)
     opts = json.loads((DATA / "options.json").read_text())
-    cfg = Settings(**{k: int(opts[k]) for k in asdict(Settings())})
-    interval = max(10, min(60, int(opts["poll_seconds"])))
+    settings = Settings(**{k: int(opts[k]) for k in asdict(Settings())})
+    interval = max(10, min(30, int(opts["poll_seconds"])))
+    cycle = Cycle()
+    owned = False
+    recovery = False
     try:
-        cycle = restore(json.loads((DATA / "cycle.json").read_text()), time.time(), cfg)
-    except (OSError, ValueError):
-        cycle = Cycle()
-    LOG.info("OBSERVATION STRICTE : aucune commande chaudière ou résistance")
-    last_key = None
+        saved = json.loads((DATA / "active_cycle.json").read_text())
+        owned = bool(saved.get("owned"))
+        recovery = owned
+        # A restart cannot resume an electrical cycle. Restore fuel and require fresh recharge.
+    except (OSError, ValueError, TypeError):
+        pass
+    last = None
     last_log = 0
-    while True:
-        now = time.time()
-        try:
-            records = get_states()
-            vals = {k: records.get(e, {}).get("state") for k, e in ENTITIES.items()}
-            permitted = (vals["automatic"] == "on" and vals["season"] == "Hiver - Mixte"
-                         and vals["boost"] == "off" and vals["fault"] == "off"
-                         and vals["resistance"] in ("on", "off"))
-            # Require a recent reported boiler temperature, not merely a cached numeric state.
-            record = records.get(ENTITIES["temp"], {})
+    LOG.info("ECS 0.1.1 : autorisation HA et parachute obligatoires")
+    try:
+        while not STOP:
+            now = time.time()
             try:
-                stamp = datetime.fromisoformat(record.get("last_reported") or record["last_updated"]).timestamp()
-                temp = number(vals["temp"]) if 0 <= now - stamp <= 180 else None
-            except (KeyError, TypeError, ValueError):
-                temp = None
-            proposal = evaluate(cycle, cfg, now=now, temp=temp, color=vals["color"],
-                                period=vals["period"], pump=vals["pump"], allowed=permitted)
-            event = {"utc": datetime.now(timezone.utc).isoformat(), "observed": vals,
-                     "proposed": asdict(proposal), "mode": "observation",
-                     "max_theoretical_kwh": 2.4 * cfg.electric_max_minutes / 60}
-        except Exception as exc:
-            cycle = Cycle(reason="lecture HA impossible")
-            event = {"utc": datetime.now(timezone.utc).isoformat(), "mode": "observation",
-                     "error": str(exc), "proposed": {"electric": False, "phase": "locked"}}
-        persist(cycle)
-        p = event["proposed"]
-        key = (p.get("phase"), p.get("fuel_target"), p.get("electric"), p.get("reason"), event.get("error"))
-        if key != last_key or now - last_log >= 300:
-            log_event(event)
-            LOG.info("%s", json.dumps(event, ensure_ascii=False))
-            last_key, last_log = key, now
-        time.sleep(interval)
+                rec = {r["entity_id"]: r for r in api("/states")}
+                def val(e): return rec.get(e, {}).get("state")
+                try:
+                    r = rec[TEMP]
+                    stamp = datetime.fromisoformat(r.get("last_reported") or r["last_updated"]).timestamp()
+                    temp = float(r["state"]) if 0 <= now-stamp <= 180 else None
+                except (ValueError, TypeError, KeyError):
+                    temp = None
+                enabled = val(ENABLE) == "on"
+                valid = (enabled and val(GUARD) == "on" and all(val(e) == "off" for e in OLD)
+                         and val(AUTO) == "on" and val(SEASON) == "Hiver - Mixte"
+                         and val(BOOST) == "off" and val(FAULT) == "off"
+                         and official(rec, now) and temp is not None and 0 <= temp <= 95
+                         and val(PUMP) in ("on", "off") and val(SW) in ("on", "off")
+                         and val(TIMER) in ("idle", "active") and val(COLOR) in ("bleu", "blanc", "rouge"))
+                if recovery:
+                    cut()
+                    fuel(55)
+                    lock(cycle, "redémarrage : ancien complément non repris")
+                    recovery = False
+                if not valid:
+                    if owned or (enabled and val(SEASON) == "Hiver - Mixte"):
+                        cut()
+                        fuel(55)
+                    lock(cycle, "désactivé ou garde-fou")
+                    owned = False
+                else:
+                    owned = True
+                    previous = cycle.phase == "electric"
+                    proposal = evaluate(cycle, settings, now=now, temp=temp, color=val(COLOR),
+                                        period=val(PERIOD), pump=val(PUMP), allowed=True)
+                    save(cycle, owned)
+                    if proposal.electric and previous:
+                        # An external cut, expired timer or contradictory fuel target locks the cycle.
+                        if (val(SW) != "on" or val(TIMER) != "active"
+                            or float(val(DAY)) != 50 or float(val(NIGHT)) != 50):
+                            cut()
+                            fuel(55)
+                            lock(cycle, "coupure externe : aucun redémarrage")
+                    elif proposal.electric:
+                        fuel(50)
+                        if (float(get(DAY)) == float(get(NIGHT)) == 50 and get(PUMP) == "off"
+                                and get(ENABLE) == get(GUARD) == "on" and get(SW) == "off"
+                                and get(TIMER) == "idle" and get(FAULT) == "off"
+                                and get(BOOST) == "off" and 50 <= float(get(TEMP)) < 55):
+                            seconds = min(7140, int(cycle.deadline-time.time())-60)
+                            if seconds <= 0:
+                                raise RuntimeError("délai insuffisant")
+                            call("timer/start", TIMER, duration=seconds)
+                            if get(TIMER) != "active" or get(ENABLE) != "on" or get(GUARD) != "on":
+                                raise RuntimeError("parachute non confirmé")
+                            call("switch/turn_on", SW)
+                            if get(SW) != "on":
+                                raise RuntimeError("contacteur non confirmé")
+                            LOG.info("Complément électrique démarré, limite %s secondes", seconds)
+                        else:
+                            cut()
+                            fuel(55)
+                            lock(cycle, "interverrouillage non confirmé")
+                    else:
+                        cut()
+                        fallback = cycle.phase == "locked" and cycle.reason != "cible électrique atteinte"
+                        fuel(55 if fallback else proposal.fuel_target)
+                save(cycle, owned)
+                event = {"phase": cycle.phase, "reason": cycle.reason, "active": valid,
+                         "temp": temp, "color": val(COLOR), "period": val(PERIOD),
+                         "pump": val(PUMP), "resistance": val(SW), "day": val(DAY), "night": val(NIGHT),
+                         "power": val("sensor.chauffe_eau_puissance"),
+                         "remaining": max(0, int(cycle.deadline-now)) if cycle.deadline else 0}
+                key = (event["phase"], event["reason"], event["active"], event["day"], event["resistance"])
+                if key != last or now-last_log >= 300:
+                    LOG.info("%s", json.dumps(event, ensure_ascii=False))
+                    last, last_log = key, now
+            except Exception as exc:
+                LOG.error("Erreur contrôle : %s", exc)
+                lock(cycle, "erreur : complément interrompu")
+                if owned:
+                    try:
+                        cut()
+                        fuel(55)
+                    except Exception as e:
+                        LOG.error("Coupure non confirmée : parachute requis : %s", e)
+                save(cycle, owned)
+            time.sleep(interval)
+    finally:
+        if owned:
+            try:
+                cut()
+                fuel(55)
+            except Exception:
+                LOG.exception("Arrêt : coupure non confirmée")
+            save(cycle, owned)
 
 if __name__ == "__main__":
     main()

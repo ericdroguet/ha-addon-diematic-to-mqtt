@@ -1,13 +1,13 @@
 name: "Régulation intelligente - ECS"
-version: "0.1.0"
+version: "0.1.1"
 slug: "ecs_regulateur"
-description: "Observation du pilotage hybride ECS fioul/électricité et Tempo"
+description: "Pilotage hybride ECS fioul/électricité et Tempo"
 url: "https://github.com/ericdroguet/ha-addon-diematic-to-mqtt"
 arch:
   - aarch64
   - amd64
 startup: services
-boot: manual
+boot: auto
 init: false
 homeassistant_api: true
 options:
