@@ -75,5 +75,16 @@ class TestHumanKnowledge(unittest.TestCase):
             self.assertIsNone(app.load_knowledge(p))
             self.assertEqual(p.read_text(),"{")
 
+class TestSuggestions(unittest.TestCase):
+    def test_specific_and_ambiguous(self):
+        self.assertEqual(app.suggest_role("binary_sensor.chambre_frost_protection",{"a":{}})["role"],"chauffage")
+        self.assertEqual(app.suggest_role("cover.salon_tv",{"a":{}})["role"],"ouvrants")
+        self.assertEqual(app.suggest_role("sensor.unknown_power",{"a":{"unit_of_measurement":"W"}})["role"],"energie")
+        self.assertIsNone(app.suggest_role("sensor.trial_vario_306_raw",{"a":{}}))
+    def test_quality_unchanged(self):
+        cat=app.make_catalog({"cover.test":{"q":"unknown","s":None,"age":1,"a":{}}})
+        self.assertEqual(cat["cover.test"]["quality"],"unknown")
+        self.assertEqual(cat["cover.test"]["suggestion"]["role"],"ouvrants")
+
 if __name__=="__main__":
     unittest.main()

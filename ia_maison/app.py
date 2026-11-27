@@ -333,10 +333,48 @@ def load_knowledge(path):
         LOG.warning("Mémoire humaine illisible; écriture bloquée pour préserver le fichier")
         return None
 
+def suggest_role(eid,r):
+    """Conservative, descriptive suggestions only; not equipment diagnosis."""
+    domain,name=eid.split(".",1)
+    a=r.get("a",{})
+    unit=a.get("unit_of_measurement")
+    dc=a.get("device_class")
+    def has(*words):
+        return any(w in name for w in words)
+    def suggestion(role,note):
+        return {"role":role,"note":note,"source":"automatic_rule"}
+    if has("frost_protection","protection_contre_le_gel","antiice"):
+        return suggestion("chauffage","Protection hors gel ou seuil associé. Un état inconnu ne signifie pas que la protection est désactivée.")
+    if has("overheat_protection","protection_contre_la_surchauffe"):
+        return suggestion("chauffage","Protection contre la surchauffe ou seuil associé. État physique non confirmé.")
+    if domain=="cover":
+        return suggestion("ouvrants","Volet, store ou autre ouvrant. Un état inconnu ne confirme ni position ni fermeture.")
+    if has("hot_water","ecs_","ballon_ecs","eau_chaude"):
+        return suggestion("ecs","Entité liée à l'eau chaude sanitaire. Mesure ou commande à distinguer selon son type.")
+    if has("fioul","linky","tempo","ecojoko","consommation","energie","energy","puissance","power"):
+        return suggestion("energie","Entité énergétique probable. Ne pas additionner sans vérifier les doublons, les unités et le périmètre.")
+    if has("wilo","zone_c_pump","pompe_circuit","delta_t","chauffage_c_melange"):
+        return suggestion("hydraulique","Entité liée au circuit hydraulique ou à sa régulation. Une valeur absente ne vaut pas zéro.")
+    if has("diematic","zone_a_","zone_b_","zone_c_","chauffage_c","trial_boiler","burner","bruleur","mode_vacances"):
+        return suggestion("chauffage","Paramètre ou état de régulation du chauffage probable. Usage exact à confirmer si nécessaire.")
+    if has("pac_piscine","filtration_piscine","pompe_piscine"):
+        return suggestion("piscine","Équipement lié à la piscine.")
+    if has("g6_","g6bullet") and has("lux_trigger","plage_dynamique","infrared","disk_write"):
+        return suggestion("autre","Réglage ou diagnostic de caméra, sans usage thermique direct identifié.")
+    if has("wall_connector","wallconnector","tesla_charg"):
+        return suggestion("recharge","Équipement ou donnée de recharge électrique probable.")
+    if has("wifi","wi_fi","rssi","signal_strength","uptime","firmware","ip_address"):
+        return suggestion("reseau","Information de connectivité ou diagnostic technique probable.")
+    if domain=="weather" or has("weather","meteo","ext_temp","outdoor_temperature"):
+        return suggestion("meteo","Donnée météorologique ou température extérieure probable.")
+    if dc in ("energy","power","current","voltage") or unit in ("kWh","Wh","W","kW","A","V"):
+        return suggestion("energie","Grandeur électrique selon l'unité ou la classe Home Assistant. Source et périmètre à vérifier.")
+    return None
+
 def make_catalog(rows):
     # Never retain arbitrary raw strings, GPS, attributes or secret text.
     return {eid:{"quality":r["q"],"state":r["s"],"age":r["age"],
-                 "unit":r["a"].get("unit_of_measurement")}
+                 "unit":r["a"].get("unit_of_measurement"),"suggestion":suggest_role(eid,r)}
             for eid,r in rows.items() if eid.split(".",1)[0] not in PRIVATE}
 
 def knowledge_view():
@@ -352,6 +390,15 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/":
             body = Path(__file__).with_name("dashboard.html").read_bytes()
             content_type = "text/html; charset=utf-8"
+        elif path == "/api/knowledge/summary":
+            with KNOWLEDGE_LOCK:
+                annotations=(KNOWLEDGE or {}).get("entities",{})
+                issues={k:v for k,v in CATALOG.items() if v["quality"]!="ok"}
+                body=json.dumps({"issues":len(issues),
+                    "suggested":sum(bool(v.get("suggestion")) for v in issues.values()),
+                    "needs_review":sum(not v.get("suggestion") and k not in annotations for k,v in issues.items()),
+                    "annotated":len(annotations)},ensure_ascii=False).encode()
+            content_type = "application/json; charset=utf-8"
         elif path == "/api/knowledge":
             body = json.dumps(knowledge_view(),ensure_ascii=False,allow_nan=False).encode()
             content_type = "application/json; charset=utf-8"

@@ -29,3 +29,6 @@ Interface HTML locale responsive via Ingress, actualisée toutes les 15 s depuis
 
 ## 0.1.2 — Mémoire humaine
 Liste des entités non privées par qualité, recherche, rôle et annotation modifiables, journal horodaté des événements manuels. Les notes sont persistées atomiquement dans `/data/observation/human_knowledge.json`, séparées des mesures et du modèle. Écriture locale via Ingress avec jeton CSRF par démarrage ; aucune commande HA. Fichier corrompu conservé et écriture bloquée. Les annotations n'altèrent ni la qualité des capteurs ni les modèles actuels ; elles préparent l'enrichissement futur. Ne pas saisir de secrets. Les 100 derniers événements sont affichés ; 10 000 maximum conservés, suppression individuelle possible. Les entités de présence privées ne figurent pas dans le catalogue.
+
+## 0.1.3 — Préclassification
+Suggestions déterministes d'après identifiant, domaine, unité et classe de mesure. Distinctes des annotations humaines et des états physiques. Filtre prioritaire pour les cas sans suggestion ; suggestions préremplies, confirmation individuelle facultative. Aucun changement du modèle, des mesures ou des équipements. Endpoint local de synthèse `/api/knowledge/summary`. Pas encore d'analyse du registre des intégrations.
