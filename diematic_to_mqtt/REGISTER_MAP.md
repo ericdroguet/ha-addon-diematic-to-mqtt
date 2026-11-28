@@ -29,6 +29,21 @@ Aucune nouvelle commande en écriture en 1.1.12. Ne pas déduire l'écriture de 
 
 Version 1.1.13: essai manuel du seul registre 266 (4–16 K), lecture fraîche avant écriture unique, contrôle après, blocage en cas de valeur non confirmée. Aucun changement automatique. 438 reste en lecture seule et non identifié.
 
+## 1.1.14 — validation physique à effectuer après installation
+
+Les adresses ci-dessous restent **en lecture seule**. Les bornes de décodage du logiciel ne constituent pas des limites d'écriture validées.
+
+| Paramètre | Adresse lecture | Échelle | Référence observée |
+|---|---:|---|---|
+| Pente C | 669 | /10 | 1,8 |
+| Inertie bâtiment | 264 | entier | 3 |
+| Marche minimale brûleur | 269 | min | 1 |
+| Temporisation brûleur | 271 | min | 4 |
+
+Procédure : relever la valeur au panneau et via MQTT ; consulter la documentation installateur correspondant au CTRL 1422 ; vérifier la plage admissible ; avec accord de l'utilisateur, modifier **un seul** paramètre au panneau dans une plage autorisée, comparer la lecture, puis restaurer la valeur initiale et vérifier les deux affichages. Ne pas déduire l'adresse d'écriture de cette expérience. Aucune commande MQTT supplémentaire avant validation de l'adresse d'écriture et revue de sécurité. Surveiller température chaudière, consigne calculée, ECS, cycles brûleur et confort. Ne pas modifier les limites de sécurité ni les protections matérielles.
+
+Les identifiants historiques, topics MQTT, unités et échelles sont inchangés. Ne pas supprimer les entités ni purger Recorder pour cette mise à jour.
+
 ## Sources
 - https://community.jeedom.com/uploads/short-url/luej1LlG3Wu6xGjpEOxCXbrPCoq.pdf
 - https://community.jeedom.com/uploads/short-url/qjNF6pFIcvSXRka7EFug2vIEKZE.pdf
