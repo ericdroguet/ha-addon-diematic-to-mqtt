@@ -81,5 +81,39 @@ class TestThermal(unittest.TestCase):
             f.write_text(json.dumps({"schema":1,"rooms":model.rooms}))
             self.assertEqual(thermal.load_shadow(f),model.rooms)
 
+class TestSolar(unittest.TestCase):
+    def setUp(self):
+        self.rows={"sun.sun":row("above_horizon",elevation=30.,azimuth=180.),
+                   "weather.forecast_maison":row("partlycloudy",cloud_coverage=20.),
+                   "cover.test":row("open",current_position=50.),
+                   "sensor.chauffage_c_solaire_prevision_solar_6h":row(1.4,unit_of_measurement="kWh/m²")}
+    def test_orientation(self):
+        south={"azimuth":180.,"tilt":90.}
+        north={"azimuth":0.,"tilt":90.}
+        self.assertAlmostEqual(thermal.solar_proxy(self.rows,[south]),.8*3**.5/2)
+        self.assertEqual(thermal.solar_proxy(self.rows,[north]),0.)
+        self.assertAlmostEqual(thermal.solar_proxy(self.rows,[{"azimuth":0.,"tilt":0.}]),.4)
+        self.assertEqual(thermal.solar_context(self.rows)["forecast_kwh_m2"],{"6":1.4})
+    def test_cover_and_missing(self):
+        s={"azimuth":180.,"tilt":90.,"cover":"cover.test"}
+        self.assertAlmostEqual(thermal.solar_proxy(self.rows,[s]),.4*3**.5/2)
+        self.rows["cover.test"]["age"]=3601
+        self.assertIsNone(thermal.solar_proxy(self.rows,[s]))
+        self.rows["sun.sun"]["a"]["elevation"]=-5
+        self.assertEqual(thermal.solar_proxy(self.rows,[s]),0.)
+    def test_unknown_cloud(self):
+        self.rows["weather.forecast_maison"]["q"]="unavailable"
+        self.assertIsNone(thermal.solar_proxy(self.rows,[{"azimuth":180.,"tilt":90.}]))
+    def test_validation(self):
+        for surf in ({"azimuth":-1,"tilt":90},{"azimuth":180,"tilt":91},{"azimuth":180,"tilt":90,"cover":"person.test"},{"azimuth":180,"tilt":90,"weight":0}):
+            with self.assertRaises(ValueError):
+                thermal.validate_profiles({"schema":1,"rooms":{"climate.test":{"solar_surfaces":[surf]}}})
+        p=thermal.validate_profiles({"schema":1,"rooms":{"climate.test":{"solar_surfaces":[{"azimuth":180,"tilt":90}]}}})
+        self.assertEqual(p["rooms"]["climate.test"]["solar_surfaces"][0]["weight"],1.)
+    def test_profile_isolation(self):
+        p={"area_m2":20.}
+        enriched=dict(p,solar_surfaces=[{"azimuth":180.,"tilt":90.}])
+        self.assertEqual(thermal.signature(p),thermal.signature({k:v for k,v in enriched.items() if k!="solar_surfaces"}))
+
 if __name__=="__main__":
     unittest.main()
