@@ -9,7 +9,7 @@ N_FEATURES = 11
 MAX_ROOMS = 100
 FIELDS = {"area_m2", "height_min_m", "height_max_m", "height_mean_m",
           "controlled_emitters", "manual_emitters", "insulation",
-          "neighbors", "attic", "air_conditioners", "covers", "solar_surfaces"}
+          "neighbors", "attic", "air_conditioners", "covers", "solar_surfaces", "solar_cover_memory"}
 ENTITY = re.compile(r"^[a-z_]+\.[a-z0-9_]+$")
 
 
@@ -61,7 +61,7 @@ def validate_profiles(payload, catalog=None):
             if not isinstance(p["insulation"],str) or p["insulation"] not in ("low","medium","high","mixed","unknown"):
                 raise ValueError("Isolation invalide")
             q["insulation"]=p["insulation"]
-        for field, domains in (("neighbors",{"climate"}),("air_conditioners",{"climate"}),("covers",{"cover"})):
+        for field, domains in (("neighbors",{"climate"}),("air_conditioners",{"climate"}),("covers",{"cover"}),("solar_cover_memory",{"input_boolean"})):
             if field in p:
                 vals=p[field]
                 if not isinstance(vals,list) or len(vals)>20:
@@ -90,6 +90,8 @@ def validate_profiles(payload, catalog=None):
                     v["cover"]=eid(surf["cover"],{"cover"})
                 clean.append(v)
             q["solar_surfaces"]=clean
+        if "solar_cover_memory" in p and (not q.get("solar_cover_memory") or not q.get("solar_surfaces")):
+            raise ValueError("Memoire solaire sans surfaces ou vide")
         out[room]=q
     return {"schema":1,"rooms":out}
 
@@ -165,6 +167,22 @@ def solar_proxy(rows,surfaces,context=None):
     return (1-c/100)*sum(v*w for v,w in terms)/sum(w for _,w in terms)
 
 
+def estimated_open_fraction(rows, memories):
+    """Persistent binary command memory, not physical feedback.
+    Deliberately does not expire merely because a stable state is old.
+    Invalid/unavailable values exclude the sample.
+    """
+    if not memories:
+        return None
+    values=[]
+    for eid in memories:
+        r=rows.get(eid,{})
+        if r.get("q")!="ok" or r.get("s") not in ("on","off"):
+            return None
+        values.append(float(r["s"]=="on"))
+    return sum(values)/len(values)
+
+
 def thermal_features(rows, base, profiles):
     """Heat-balance proxies, not watts: learn coefficients from observations.
     Missing mapped data invalidates the sample, never becomes an assumed zero.
@@ -233,6 +251,12 @@ def thermal_features(rows, base, profiles):
             solar=solar_proxy(rows,p["solar_surfaces"])
             if solar is None:
                 continue
+            if p.get("solar_cover_memory"):
+                fraction=estimated_open_fraction(rows,p["solar_cover_memory"])
+                if fraction is None:
+                    continue
+                # Equal weight by curtain, not a measured glazing-area fraction.
+                solar*=fraction
         elif covers:
             sun=fresh(rows,"sun.sun",1800)
             elevation=bounded(sun.get("a",{}).get("elevation"),-90,90) if sun else None
@@ -310,6 +334,9 @@ class Shadow:
                 "validated":False}
             if profiles[eid].get("solar_surfaces"):
                 result[eid]["solar_opportunity"]=round(x[10],3)
+                if profiles[eid].get("solar_cover_memory"):
+                    result[eid]["estimated_open_fraction"]=estimated_open_fraction(rows,profiles[eid]["solar_cover_memory"])
+                    result[eid]["cover_quality"]="estimated_command_memory"
         return result
 
 
