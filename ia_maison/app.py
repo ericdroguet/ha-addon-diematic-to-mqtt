@@ -498,12 +498,15 @@ def main():
     PROFILES=thermal.load_profiles(DATA/"thermal_profiles.json")
     shadow_path=DATA/"thermal_shadow.json"
     shadow=thermal.Shadow(thermal.load_shadow(shadow_path))
+    solar_path=DATA/"thermal_solar.json"
+    solar_model=thermal.Shadow(thermal.load_shadow(solar_path))
     server = ThreadingHTTPServer(("0.0.0.0",8099), Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     LOG.info("Observation seule; aucun service HA ni API externe; intervalle=%ss",interval)
     last_prune = 0
     last_save = 0
     last_shadow_save = 0
+    last_solar_save = 0
     consecutive = 0
     total_cycles = 0
     failures = 0
@@ -529,13 +532,16 @@ def main():
                 last_save=now
             # Shadow failure must never interrupt the existing observation and learner.
             shadow_preds={}
+            solar_preds={}
+            solar_error=None
             shadow_error=None
             with KNOWLEDGE_LOCK:
                 profiles=(PROFILES or {}).get("rooms",{})
                 profile_ok=PROFILES is not None
             try:
                 if consecutive>=3 and profile_ok:
-                    shadow_preds=shadow.observe(now,rows,features(rows),profiles,preds)
+                    base_profiles={k:{a:b for a,b in p.items() if a!="solar_surfaces"} for k,p in profiles.items()}
+                    shadow_preds=shadow.observe(now,rows,features(rows),base_profiles,preds)
                 if now-last_shadow_save>=300:
                     atomic_json(shadow_path,{"schema":1,"rooms":shadow.rooms})
                     last_shadow_save=now
@@ -543,6 +549,17 @@ def main():
                 shadow.reset_pending()
                 shadow_error=type(exc).__name__
                 LOG.warning("Modele thermique experimental: %s",shadow_error)
+            try:
+                solar_profiles={k:p for k,p in profiles.items() if p.get("solar_surfaces")}
+                if consecutive>=3 and profile_ok:
+                    solar_preds=solar_model.observe(now,rows,features(rows),solar_profiles,shadow_preds)
+                if now-last_solar_save>=300:
+                    atomic_json(solar_path,{"schema":1,"rooms":solar_model.rooms})
+                    last_solar_save=now
+            except Exception as exc:
+                solar_model.reset_pending()
+                solar_error=type(exc).__name__
+                LOG.warning("Modele solaire experimental: %s",solar_error)
             q={}
             for r in rows.values():
                 q[r["q"]]=q.get(r["q"],0)+1
@@ -555,7 +572,9 @@ def main():
                           learned_samples=sum(m["n"] for m in model.rooms.values()),
                           learned_rooms=sum(m["n"]>0 for m in model.rooms.values()),
                           thermal_shadow={"configured_rooms":len(profiles),"profile_ok":profile_ok,
-                              "predictions":shadow_preds,"error":shadow_error,"control":False})
+                              "predictions":shadow_preds,"error":shadow_error,"control":False},
+                          solar_shadow={"configured_rooms":len(solar_profiles),"context":thermal.solar_context(rows),
+                              "predictions":solar_preds,"error":solar_error,"control":False})
             if consecutive<=3 or consecutive%10==0:
                 LOG.info("Collecte: %s entites, qualite=%s, modeles=%s, archive=%s octets",
                          len(rows),q,len(preds),size)
@@ -565,6 +584,7 @@ def main():
             model.reset_pending()
             model.last=None
             shadow.reset_pending()
+            solar_model.reset_pending()
             update_status(phase="degrade", room_predictions={}, consecutive=0,
                           last_error=type(exc).__name__, session_failures=failures)
             LOG.warning("Observation interrompue: %s",type(exc).__name__)
