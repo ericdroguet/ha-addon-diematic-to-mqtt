@@ -1,0 +1,19 @@
+name: IA thermal tests
+on:
+  pull_request:
+    paths:
+      - 'ia_maison/**'
+      - '.github/workflows/ia-thermal-tests.yml'
+permissions:
+  contents: read
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile and test
+        working-directory: ia_maison
+        run: |
+          python3 -m py_compile app.py thermal.py
+          python3 -m unittest -v test_app test_thermal
