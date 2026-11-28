@@ -9,7 +9,7 @@ N_FEATURES = 11
 MAX_ROOMS = 100
 FIELDS = {"area_m2", "height_min_m", "height_max_m", "height_mean_m",
           "controlled_emitters", "manual_emitters", "insulation",
-          "neighbors", "attic", "air_conditioners", "covers"}
+          "neighbors", "attic", "air_conditioners", "covers", "solar_surfaces"}
 ENTITY = re.compile(r"^[a-z_]+\.[a-z0-9_]+$")
 
 
@@ -72,6 +72,24 @@ def validate_profiles(payload, catalog=None):
                 q[field]=sorted(vals)
         if "attic" in p:
             q["attic"]=eid(p["attic"],{"climate","sensor"})
+        if "solar_surfaces" in p:
+            surfaces=p["solar_surfaces"]
+            if not isinstance(surfaces,list) or not 1<=len(surfaces)<=12:
+                raise ValueError("Surfaces solaires invalides")
+            clean=[]
+            for surf in surfaces:
+                if not isinstance(surf,dict) or set(surf)-{"azimuth","tilt","cover","weight"} or not {"azimuth","tilt"}<=set(surf):
+                    raise ValueError("Surface solaire invalide")
+                az=bounded(surf["azimuth"],0,360)
+                tilt=bounded(surf["tilt"],0,90)
+                weight=bounded(surf.get("weight",1),.01,100)
+                if az is None or tilt is None or weight is None:
+                    raise ValueError("Orientation solaire invalide")
+                v={"azimuth":az%360,"tilt":tilt,"weight":weight}
+                if "cover" in surf:
+                    v["cover"]=eid(surf["cover"],{"cover"})
+                clean.append(v)
+            q["solar_surfaces"]=clean
         out[room]=q
     return {"schema":1,"rooms":out}
 
@@ -101,6 +119,50 @@ def temperature(rows,eid):
     if r is None:
         return None
     return bounded(r.get("a",{}).get("current_temperature") if eid.startswith("climate.") else r.get("s"),-40,65)
+
+
+def solar_context(rows):
+    sun=fresh(rows,"sun.sun",1800)
+    weather=fresh(rows,"weather.forecast_maison",7200)
+    elevation=bounded(sun.get("a",{}).get("elevation"),-90,90) if sun else None
+    azimuth=bounded(sun.get("a",{}).get("azimuth"),0,360) if sun else None
+    cloud=bounded(weather.get("a",{}).get("cloud_coverage"),0,100) if weather else None
+    forecasts={}
+    for hours in (6,24,72):
+        r=fresh(rows,f"sensor.chauffage_c_solaire_prevision_solar_{hours}h",10800)
+        n=bounded(r.get("s"),0,100) if r else None
+        if n is not None and r.get("a",{}).get("unit_of_measurement")=="kWh/m²":
+            forecasts[str(hours)]=n
+    return {"elevation":elevation,"azimuth":azimuth,"cloud_coverage":cloud,"forecast_kwh_m2":forecasts}
+
+
+def solar_proxy(rows,surfaces,context=None):
+    """Dimensionless direct-sun opportunity, not measured irradiance or watts.
+    Unmapped covers mean unknown attenuation, not confirmed open.
+    Explicitly mapped stale covers suppress that prediction rather than invent a position.
+    """
+    ctx=solar_context(rows) if context is None else context
+    e,a,c=ctx["elevation"],ctx["azimuth"],ctx["cloud_coverage"]
+    if e is None or a is None:
+        return None
+    if e<=0:
+        return 0.
+    if c is None:
+        return None
+    er=math.radians(e)
+    terms=[]
+    for s in surfaces:
+        tilt=math.radians(s["tilt"])
+        incidence=max(0.,math.sin(er)*math.cos(tilt)+math.cos(er)*math.sin(tilt)*math.cos(math.radians(a-s["azimuth"])))
+        opening=1.
+        if "cover" in s and incidence>0:
+            r=fresh(rows,s["cover"],3600)
+            pos=bounded(r.get("a",{}).get("current_position"),0,100) if r else None
+            if pos is None:
+                return None
+            opening=pos/100
+        terms.append((incidence*opening,s.get("weight",1.)))
+    return (1-c/100)*sum(v*w for v,w in terms)/sum(w for _,w in terms)
 
 
 def thermal_features(rows, base, profiles):
@@ -167,7 +229,11 @@ def thermal_features(rows, base, profiles):
         if len(covers)!=len(p.get("covers",[])):
             continue
         solar=0.
-        if covers:
+        if p.get("solar_surfaces"):
+            solar=solar_proxy(rows,p["solar_surfaces"])
+            if solar is None:
+                continue
+        elif covers:
             sun=fresh(rows,"sun.sun",1800)
             elevation=bounded(sun.get("a",{}).get("elevation"),-90,90) if sun else None
             if elevation is None:
@@ -242,6 +308,8 @@ class Shadow:
                 "paired_samples":pn,"paired_shadow_mae":round(m["paired_ae"]/pn,3) if pn else None,
                 "paired_legacy_mae":round(m["legacy_ae"]/pn,3) if pn else None,
                 "validated":False}
+            if profiles[eid].get("solar_surfaces"):
+                result[eid]["solar_opportunity"]=round(x[10],3)
         return result
 
 
