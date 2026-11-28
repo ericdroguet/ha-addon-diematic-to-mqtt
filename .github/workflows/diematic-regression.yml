@@ -1,0 +1,21 @@
+name: Diematic regression
+on:
+  pull_request:
+    paths:
+      - 'diematic_to_mqtt/**'
+      - '.github/workflows/diematic-regression.yml'
+permissions:
+  contents: read
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Compile and test
+        working-directory: diematic_to_mqtt
+        run: |
+          python -m compileall -q src tests
+          python -m unittest discover -s tests -v
