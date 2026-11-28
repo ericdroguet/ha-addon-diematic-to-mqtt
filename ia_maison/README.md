@@ -35,3 +35,17 @@ Suggestions déterministes d'après identifiant, domaine, unité et classe de me
 
 ## 0.1.4 — Accès ciblé à la mémoire
 Endpoints Ingress locaux `/api/knowledge/session` et `/api/knowledge/entity?id=...` pour lire le jeton et vérifier une annotation sans transférer le catalogue complet. Les écritures restent protégées par le même jeton CSRF. Aucun changement du modèle ni des permissions.
+
+## 0.1.5 — Modèle thermique parallèle expérimental
+Profils structurés locaux versionnés (surface, hauteurs, émetteurs, voisins,
+combles, climatisations, ouvrants). Aucune donnée privée incluse dans le dépôt.
+GET/POST /api/thermal/profiles via Ingress, même protection CSRF que la mémoire.
+POST remplace le profil complet après validation contre le catalogue observé.
+Stockage séparé thermal_profiles.json et thermal_shadow.json dans /data/observation.
+Une modification du profil réinitialise uniquement le modèle expérimental de la zone.
+Surfaces et hauteur moyenne explicitement connue normalisent les termes de chauffage ;
+hauteurs min/max et catégorie qualitative d'isolation restent descriptives. Les termes
+hydrauliques, échanges voisins, combles, PAC et occultation sont des indicateurs,
+pas des puissances ni un bilan causal. Une mesure mappée indisponible exclut la zone
+pour cette fenêtre. Le modèle initial reste inchangé. Comparaison sur mêmes instants
+avec l'ancien modèle et persistance, validation toujours false ; aucun pilotage.
