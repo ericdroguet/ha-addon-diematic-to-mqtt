@@ -4,7 +4,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))
-from advanced_settings import AdvancedProbe, decode, validate_block, decode_experimental, EXPERIMENTAL_READ, RETIRED_SETTINGS
+from advanced_settings import AdvancedProbe, decode, validate_block, decode_experimental, EXPERIMENTAL_READ, RETIRED_SETTINGS, SETTINGS, EXPERIMENTAL_SETTINGS, retry_delay
 
 class TestAdvancedSettings(unittest.TestCase):
     def test_scaling_and_bounds(self):
@@ -20,11 +20,11 @@ class TestAdvancedSettings(unittest.TestCase):
         self.assertIsNone(validate_block(664,8,data,{35:220,36:190}))
         self.assertIsNone(validate_block(619,2,{619:500,620:800},{44:430}))
 
-    def test_default_off_and_fail_stop(self):
+    def test_default_off_and_backoff(self):
         p = AdvancedProbe()
         interface = Mock()
         logger = Mock()
-        with patch("advanced_settings.time.time", return_value=1):
+        with patch("advanced_settings.time.time", return_value=1), patch("advanced_settings.time.monotonic", return_value=1):
             p.poll(interface,10,{},logger,1)
             interface.masterReadAnalog.assert_not_called()
             p.enabled = True
@@ -34,6 +34,7 @@ class TestAdvancedSettings(unittest.TestCase):
             self.assertEqual(p.messages(True)["advanced/678/availability"],"Offline")
             p.poll(interface,10,{},logger,1)
             self.assertEqual(interface.masterReadAnalog.call_count,1)
+            self.assertEqual(p.block_retry_at[619], 61)
 
     def test_experimental_scaling(self):
         self.assertEqual(decode_experimental(266, 120), "12.0")
@@ -125,6 +126,103 @@ class TestAdvancedSettings(unittest.TestCase):
         self.assertTrue(p.band_write_blocked)
         self.assertFalse(p.can_write_band())
         interface.masterWriteAnalog.assert_not_called()
+
+    def test_failed_block_recovers_and_other_data_survives(self):
+        p = AdvancedProbe()
+        p.enabled = True
+        p.experimental_next = 10000
+        p.values[678] = (750, 100)
+        interface, logger = Mock(), Mock()
+        interface.masterReadAnalog.side_effect = [
+            None,
+            dict(zip(range(664,672), [215,190,60,8,3,18,200,750])),
+            {677:450,678:750},
+            {619:500,620:720},
+        ]
+        for t in (100,130,160,190):
+            with patch("advanced_settings.time.time", return_value=t), patch("advanced_settings.time.monotonic", return_value=t):
+                p.poll(interface,10,{35:215,36:190,44:500,61:4},logger,t)
+                msg = p.messages(True)
+                self.assertEqual(msg["advanced/678"], "75.0")
+                self.assertEqual(msg["advanced/61"], "4")
+                if t < 190:
+                    self.assertEqual(msg["advanced/620/availability"], "Offline")
+                    self.assertFalse(p.can_write_max())
+        with patch("advanced_settings.time.monotonic", return_value=190):
+            self.assertEqual(p.messages(True)["advanced/620"], "72.0")
+            self.assertEqual(p.messages(True)["advanced/669"], "1.8")
+            self.assertTrue(p.can_write_max())
+        self.assertFalse(p.stopped)
+        self.assertEqual(p.block_failures, {})
+        interface.masterWriteAnalog.assert_not_called()
+
+    def test_backoff_and_alias_mismatch(self):
+        p = AdvancedProbe()
+        p.enabled = True
+        p.experimental_next = 10000
+        interface, logger = Mock(), Mock()
+        interface.masterReadAnalog.return_value = {619:500,620:720}
+        for t, delay in ((100,60),(160,120),(280,240),(520,480),(1000,900),(1900,900)):
+            p.index = 0
+            with patch("advanced_settings.time.time", return_value=t), patch("advanced_settings.time.monotonic", return_value=t):
+                p.poll(interface,10,{44:400},logger,t)
+                self.assertEqual(p.block_retry_at[619], t+delay)
+                self.assertEqual(p.messages(True)["advanced/620/availability"], "Offline")
+        self.assertEqual(retry_delay(99),900)
+        interface.masterWriteAnalog.assert_not_called()
+
+    def test_experimental_retry_recovers(self):
+        p = AdvancedProbe()
+        p.enabled = True
+        p.next_read = 10000
+        interface, logger = Mock(), Mock()
+        interface.masterReadAnalog.side_effect = [None,{264:3}]
+        for t in (100,160):
+            p.experimental_index = 0
+            with patch("advanced_settings.time.time", return_value=t), patch("advanced_settings.time.monotonic", return_value=t):
+                p.poll(interface,10,{},logger,t)
+                if t == 100:
+                    self.assertIn(264,p.experimental_failed)
+                else:
+                    self.assertNotIn(264,p.experimental_failed)
+                    self.assertEqual(p.messages(True)["advanced/264"], "3")
+        interface.masterWriteAnalog.assert_not_called()
+
+    def test_expired_confirmation_does_not_stop_reads(self):
+        p = AdvancedProbe()
+        p.enabled = True
+        p.expected_band = 140
+        p.band_deadline = 100
+        p.expected_max = 750
+        p.max_deadline = 100
+        interface, logger = Mock(), Mock()
+        interface.masterReadAnalog.return_value = {619:500,620:720}
+        with patch("advanced_settings.time.time", return_value=101), patch("advanced_settings.time.monotonic", return_value=101):
+            p.poll(interface,10,{44:500},logger,101)
+            self.assertEqual(p.messages(True)["advanced/620"], "72.0")
+            self.assertTrue(p.band_write_blocked)
+            self.assertTrue(p.max_write_blocked)
+            self.assertFalse(p.can_write_band())
+            self.assertFalse(p.can_write_max())
+        interface.masterWriteAnalog.assert_not_called()
+
+    def test_maximum_mismatch_blocks_writes(self):
+        p = AdvancedProbe()
+        p.enabled = True
+        interface, logger = Mock(), Mock()
+        interface.masterReadAnalog.return_value = {677:450,678:800}
+        with patch("advanced_settings.time.time", return_value=100), patch("advanced_settings.time.monotonic", return_value=100):
+            p.verify_max(750)
+            p.poll(interface,10,{},logger,100)
+            self.assertEqual(p.messages(True)["advanced/678"], "80.0")
+            self.assertTrue(p.max_write_blocked)
+            self.assertFalse(p.can_write_max())
+        interface.masterWriteAnalog.assert_not_called()
+
+    def test_legacy_sensor_ids_and_topics(self):
+        expected = {620:"boiler_calculated_temp",668:"zone_c_room_influence",669:"zone_c_heating_slope",670:"zone_c_min_departure",671:"zone_c_max_departure",677:"boiler_min_temp",678:"boiler_max_temp",11:"trial_pump_heating_delay",60:"trial_ecs_priority",61:"trial_ecs_pump_delay",72:"trial_differential_a",264:"trial_building_inertia",266:"trial_valve_band",268:"trial_antilegionella",269:"trial_burner_min_run",271:"trial_burner_delay",272:"trial_boiler_pump_delay",273:"trial_boiler_unload",426:"boiler_valve_offset_readback",435:"diematic_register_435_raw",438:"trial_boiler_band"}
+        self.assertEqual({s[0]:s[1] for s in SETTINGS+EXPERIMENTAL_SETTINGS},expected)
+        self.assertEqual(set(AdvancedProbe().messages(True)),{topic for a in expected for topic in (f"advanced/{a}",f"advanced/{a}/availability")})
 
 if __name__ == "__main__":
     unittest.main()
