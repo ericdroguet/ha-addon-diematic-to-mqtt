@@ -26,7 +26,7 @@ def bounded(x, lo, hi):
 
 def validate_profiles(payload, catalog=None):
     """Reject unknown fields, private entities, nonfinite values and dangling mappings."""
-    if not isinstance(payload, dict) or set(payload) != {"schema", "rooms"} or payload["schema"] != 1:
+    if not isinstance(payload, dict) or set(payload) != {"schema", "rooms"} or type(payload["schema"]) is not int or payload["schema"] != 1:
         raise ValueError("Profil thermique: schema invalide")
     rooms = payload["rooms"]
     if not isinstance(rooms, dict) or len(rooms) > MAX_ROOMS:
@@ -58,7 +58,7 @@ def validate_profiles(payload, catalog=None):
                     raise ValueError("Nombre emetteurs invalide")
                 q[field]=n
         if "insulation" in p:
-            if p["insulation"] not in ("low","medium","high","mixed","unknown"):
+            if not isinstance(p["insulation"],str) or p["insulation"] not in ("low","medium","high","mixed","unknown"):
                 raise ValueError("Isolation invalide")
             q["insulation"]=p["insulation"]
         for field, domains in (("neighbors",{"climate"}),("air_conditioners",{"climate"}),("covers",{"cover"})):
@@ -81,7 +81,7 @@ def load_profiles(path):
         return validate_profiles(json.loads(path.read_text()))
     except FileNotFoundError:
         return {"schema":1,"rooms":{}}
-    except (ValueError,TypeError,OSError):
+    except (ValueError,TypeError,OSError,AttributeError):
         return None
 
 
