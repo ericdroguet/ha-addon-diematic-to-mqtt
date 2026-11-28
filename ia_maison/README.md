@@ -49,3 +49,6 @@ hydrauliques, échanges voisins, combles, PAC et occultation sont des indicateur
 pas des puissances ni un bilan causal. Une mesure mappée indisponible exclut la zone
 pour cette fenêtre. Le modèle initial reste inchangé. Comparaison sur mêmes instants
 avec l'ancien modèle et persistance, validation toujours false ; aucun pilotage.
+
+## 0.1.6 — Soleil et météo locale
+Troisième modèle indépendant, comparé au modèle thermique sans solaire sur les mêmes instants. Les profils locaux acceptent solar_surfaces (azimuth en degrés depuis le nord, tilt 0 horizontal/90 vertical, poids relatif optionnel, cover optionnel). Indice géométrique normalisé corrigé de nébulosité, non irradiance mesurée, sans estimation de watts. Sans occultation fiable l'indice est une opportunité solaire, pas un apport réel ; un cover explicitement lié mais périmé exclut la prévision de jour. Les prévisions solaires 6/24/72h déjà présentes dans HA sont affichées en contexte, pas encore injectées comme mesures instantanées. Aucun nouvel appel météo ou cloud. Le modèle 0.1.5 et son fichier restent intacts, les données privées demeurent locales. Aucun pilotage.

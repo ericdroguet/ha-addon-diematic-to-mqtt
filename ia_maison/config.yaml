@@ -1,5 +1,5 @@
 name: "IA Maison - Meylan"
-version: "0.1.5"
+version: "0.1.6"
 slug: ia_maison
 description: "Observation locale et apprentissage thermique sans commande"
 url: "https://github.com/ericdroguet/ha-addon-diematic-to-mqtt"
