@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.1.14
+
+- Isolate failed advanced blocks and individual installer reads, retry after 60/120/240/480/900 seconds, keep healthy telemetry and existing MQTT IDs. Normal poll intervals and timeouts unchanged; log register, reason, retry and recovery.
+- Expire outstanding manual readback after 150 seconds; never replay a write; lock the affected installer write until restart if confirmation expires or mismatches. Confirmed block failures inhibit installer writes until recovery.
+- Prepare physical validation of C slope (669), building inertia (264), minimum burner run (269), and burner delay (271); these remain read-only pending verified manufacturer ranges and write-address confirmation. No automatic tuning.
+- No recorder migration, entity deletion, unique ID or MQTT topic change. Regression tests cover recovery, rejection, write expiry and historical sensor IDs.
+
 ## 1.1.13
 
 - Manual V3V band register 266 only, 4–16 K in integer steps; no automatic tuning. Ignore retained commands and stale data. Fresh preflight read, one write, independent readback and fail-block on mismatch. Other installer writes unchanged.
