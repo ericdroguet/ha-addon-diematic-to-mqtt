@@ -22,6 +22,7 @@ class TestAdvancedSettings(unittest.TestCase):
 
     def test_default_off_and_backoff(self):
         p = AdvancedProbe()
+        p.experimental_next = 1000
         interface = Mock()
         logger = Mock()
         with patch("advanced_settings.time.time", return_value=1), patch("advanced_settings.time.monotonic", return_value=1):
@@ -223,6 +224,22 @@ class TestAdvancedSettings(unittest.TestCase):
         expected = {620:"boiler_calculated_temp",668:"zone_c_room_influence",669:"zone_c_heating_slope",670:"zone_c_min_departure",671:"zone_c_max_departure",677:"boiler_min_temp",678:"boiler_max_temp",11:"trial_pump_heating_delay",60:"trial_ecs_priority",61:"trial_ecs_pump_delay",72:"trial_differential_a",264:"trial_building_inertia",266:"trial_valve_band",268:"trial_antilegionella",269:"trial_burner_min_run",271:"trial_burner_delay",272:"trial_boiler_pump_delay",273:"trial_boiler_unload",426:"boiler_valve_offset_readback",435:"diematic_register_435_raw",438:"trial_boiler_band"}
         self.assertEqual({s[0]:s[1] for s in SETTINGS+EXPERIMENTAL_SETTINGS},expected)
         self.assertEqual(set(AdvancedProbe().messages(True)),{topic for a in expected for topic in (f"advanced/{a}",f"advanced/{a}/availability")})
+
+    def test_busy_bus_and_poll_budget(self):
+        p = AdvancedProbe()
+        p.enabled = True
+        p.experimental_next = 10000
+        interface, logger = Mock(), Mock()
+        interface.masterReadAnalog.return_value = {619:500,620:720}
+        with patch("advanced_settings.time.time", return_value=100), patch("advanced_settings.time.monotonic", return_value=100):
+            p.poll(interface,10,{44:500},logger,98)
+            interface.masterReadAnalog.assert_not_called()
+            p.poll(interface,10,{44:500},logger,100)
+            self.assertEqual(p.next_read,130)
+        with patch("advanced_settings.time.time", return_value=129), patch("advanced_settings.time.monotonic", return_value=129):
+            p.poll(interface,10,{44:500},logger,129)
+            interface.masterReadAnalog.assert_called_once_with(10,619,2,timeout=0.75)
+        interface.masterWriteAnalog.assert_not_called()
 
 if __name__ == "__main__":
     unittest.main()
