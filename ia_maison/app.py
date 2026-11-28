@@ -540,7 +540,7 @@ def main():
                 profile_ok=PROFILES is not None
             try:
                 if consecutive>=3 and profile_ok:
-                    base_profiles={k:{a:b for a,b in p.items() if a!="solar_surfaces"} for k,p in profiles.items()}
+                    base_profiles={k:{a:b for a,b in p.items() if a not in ("solar_surfaces","solar_cover_memory")} for k,p in profiles.items()}
                     shadow_preds=shadow.observe(now,rows,features(rows),base_profiles,preds)
                 if now-last_shadow_save>=300:
                     atomic_json(shadow_path,{"schema":1,"rooms":shadow.rooms})

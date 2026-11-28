@@ -115,5 +115,21 @@ class TestSolar(unittest.TestCase):
         enriched=dict(p,solar_surfaces=[{"azimuth":180.,"tilt":90.}])
         self.assertEqual(thermal.signature(p),thermal.signature({k:v for k,v in enriched.items() if k!="solar_surfaces"}))
 
+class TestEstimatedCover(unittest.TestCase):
+    def test_persistent_binary_memory(self):
+        rows={"input_boolean.a":row("on"),"input_boolean.b":row("off")}
+        rows["input_boolean.a"]["age"]=86400
+        rows["input_boolean.b"]["age"]=86400
+        self.assertEqual(thermal.estimated_open_fraction(rows,list(rows)),.5)
+        rows["input_boolean.b"]["q"]="unavailable"
+        self.assertIsNone(thermal.estimated_open_fraction(rows,list(rows)))
+        self.assertIsNone(thermal.estimated_open_fraction(rows,["input_boolean.missing"]))
+    def test_memory_validation(self):
+        p={"schema":1,"rooms":{"climate.test":{"solar_surfaces":[{"azimuth":180,"tilt":90}],"solar_cover_memory":["input_boolean.a"]}}}
+        self.assertEqual(thermal.validate_profiles(p)["rooms"]["climate.test"]["solar_cover_memory"],["input_boolean.a"])
+        p["rooms"]["climate.test"]["solar_cover_memory"]=["switch.a"]
+        with self.assertRaises(ValueError):
+            thermal.validate_profiles(p)
+
 if __name__=="__main__":
     unittest.main()
