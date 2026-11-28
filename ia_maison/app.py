@@ -12,6 +12,7 @@ import time
 import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import thermal
 
 LOG = logging.getLogger("ia_maison")
 DATA = Path("/data/observation")
@@ -273,6 +274,7 @@ def update_status(**kwargs):
 # Human annotations are descriptive only; never execute notes or replace raw states.
 KNOWLEDGE_LOCK = threading.Lock()
 KNOWLEDGE = {"schema":1,"entities":{},"events":[]}
+PROFILES = {"schema":1,"rooms":{}}
 CATALOG = {}
 CSRF = uuid.uuid4().hex + uuid.uuid4().hex
 ROLES = {"chauffage","ecs","energie","meteo","hydraulique","presence","ouvrants",
@@ -390,6 +392,10 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/":
             body = Path(__file__).with_name("dashboard.html").read_bytes()
             content_type = "text/html; charset=utf-8"
+        elif path == "/api/thermal/profiles":
+            with KNOWLEDGE_LOCK:
+                body=json.dumps({"writable":PROFILES is not None,"profiles":PROFILES},ensure_ascii=False,allow_nan=False).encode()
+            content_type = "application/json; charset=utf-8"
         elif path == "/api/knowledge/session":
             with KNOWLEDGE_LOCK:
                 body=json.dumps({"writable":KNOWLEDGE is not None,"csrf":CSRF}).encode()
@@ -429,8 +435,9 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_POST(self):
-        global KNOWLEDGE
-        if self.path.split("?")[0] != "/api/knowledge":
+        global KNOWLEDGE,PROFILES
+        path=self.path.split("?")[0]
+        if path not in ("/api/knowledge","/api/thermal/profiles"):
             self.send_error(404)
             return
         # Custom per-boot CSRF token; no CORS, no external access or service calls.
@@ -443,17 +450,24 @@ class Handler(BaseHTTPRequestHandler):
             return
         try:
             size=int(self.headers.get("Content-Length","0"))
-            if not 0<size<=8192:
+            if not 0<size<=(32768 if path=="/api/thermal/profiles" else 8192):
                 raise ValueError("Taille invalide")
             self.connection.settimeout(5)
             payload=json.loads(self.rfile.read(size))
             with KNOWLEDGE_LOCK:
-                if KNOWLEDGE is None:
-                    raise OSError("Mémoire en lecture seule")
-                next_data=validate_knowledge(payload,CATALOG,KNOWLEDGE,
-                            dt.datetime.now(dt.timezone.utc).isoformat())
-                atomic_json(DATA/"human_knowledge.json",next_data)
-                KNOWLEDGE=next_data
+                if path=="/api/thermal/profiles":
+                    if PROFILES is None:
+                        raise OSError("Profil thermique en lecture seule")
+                    next_data=thermal.validate_profiles(payload,CATALOG)
+                    atomic_json(DATA/"thermal_profiles.json",next_data)
+                    PROFILES=next_data
+                else:
+                    if KNOWLEDGE is None:
+                        raise OSError("Mémoire en lecture seule")
+                    next_data=validate_knowledge(payload,CATALOG,KNOWLEDGE,
+                                dt.datetime.now(dt.timezone.utc).isoformat())
+                    atomic_json(DATA/"human_knowledge.json",next_data)
+                    KNOWLEDGE=next_data
             status,response=200,{"saved":True}
         except (ValueError,TypeError,UnicodeError) as exc:
             status,response=400,{"error":str(exc)[:200]}
@@ -471,7 +485,7 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
 def main():
-    global KNOWLEDGE,CATALOG
+    global KNOWLEDGE,CATALOG,PROFILES
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     options = json.loads(Path("/data/options.json").read_text())
     interval = max(60, min(300, int(options.get("poll_seconds",60))))
@@ -481,11 +495,15 @@ def main():
     KNOWLEDGE = load_knowledge(DATA/"human_knowledge.json")
     model_path = DATA/"model.json"
     model = Learner(load_model(model_path))
+    PROFILES=thermal.load_profiles(DATA/"thermal_profiles.json")
+    shadow_path=DATA/"thermal_shadow.json"
+    shadow=thermal.Shadow(thermal.load_shadow(shadow_path))
     server = ThreadingHTTPServer(("0.0.0.0",8099), Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     LOG.info("Observation seule; aucun service HA ni API externe; intervalle=%ss",interval)
     last_prune = 0
     last_save = 0
+    last_shadow_save = 0
     consecutive = 0
     total_cycles = 0
     failures = 0
@@ -509,6 +527,22 @@ def main():
             if now-last_save>=300:
                 atomic_json(model_path,{"schema":1,"rooms":model.rooms})
                 last_save=now
+            # Shadow failure must never interrupt the existing observation and learner.
+            shadow_preds={}
+            shadow_error=None
+            with KNOWLEDGE_LOCK:
+                profiles=(PROFILES or {}).get("rooms",{})
+                profile_ok=PROFILES is not None
+            try:
+                if consecutive>=3 and profile_ok:
+                    shadow_preds=shadow.observe(now,rows,features(rows),profiles,preds)
+                if now-last_shadow_save>=300:
+                    atomic_json(shadow_path,{"schema":1,"rooms":shadow.rooms})
+                    last_shadow_save=now
+            except Exception as exc:
+                shadow.reset_pending()
+                shadow_error=type(exc).__name__
+                LOG.warning("Modele thermique experimental: %s",shadow_error)
             q={}
             for r in rows.values():
                 q[r["q"]]=q.get(r["q"],0)+1
@@ -519,7 +553,9 @@ def main():
                           storage_bytes=sum(p.stat().st_size for p in DATA.glob("obs-*.jsonl.gz")),
                           storage_limit_bytes=max_bytes, retention_days=days, poll_seconds=interval,
                           learned_samples=sum(m["n"] for m in model.rooms.values()),
-                          learned_rooms=sum(m["n"]>0 for m in model.rooms.values()))
+                          learned_rooms=sum(m["n"]>0 for m in model.rooms.values()),
+                          thermal_shadow={"configured_rooms":len(profiles),"profile_ok":profile_ok,
+                              "predictions":shadow_preds,"error":shadow_error,"control":False})
             if consecutive<=3 or consecutive%10==0:
                 LOG.info("Collecte: %s entites, qualite=%s, modeles=%s, archive=%s octets",
                          len(rows),q,len(preds),size)
@@ -528,6 +564,7 @@ def main():
             failures += 1
             model.reset_pending()
             model.last=None
+            shadow.reset_pending()
             update_status(phase="degrade", room_predictions={}, consecutive=0,
                           last_error=type(exc).__name__, session_failures=failures)
             LOG.warning("Observation interrompue: %s",type(exc).__name__)
